@@ -1,0 +1,11 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Runtime index DB lives in ~/.cache, but ignore any local copy too
+*.db
+*.db-shm
+*.db-wal
+
+# macOS
+.DS_Store

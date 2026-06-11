@@ -1,0 +1,20 @@
+{
+  "name": "ai-session-browser",
+  "owner": {
+    "name": "Ryan Tan",
+    "email": "ryan.tan@wego.com"
+  },
+  "metadata": {
+    "description": "Local web UI to browse, search, cost-analyze, and trace AI coding session history.",
+    "version": "0.2.0"
+  },
+  "plugins": [
+    {
+      "name": "session-browser",
+      "source": ".",
+      "description": "Local web UI to browse, full-text search, cost-analyze, and trace file/command provenance across Claude Code, Codex CLI, and Gemini CLI session history.",
+      "category": "tools",
+      "tags": ["sessions", "history", "search", "claude", "codex", "gemini", "local", "analytics", "cost", "provenance"]
+    }
+  ]
+}
