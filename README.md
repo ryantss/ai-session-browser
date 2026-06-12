@@ -49,7 +49,8 @@ python3 -m unittest discover tests
 ```
 
 Stdlib `unittest` (no test deps). Covers the pricing math, the date-suffix model normalization, the
-provenance/patch parsing, and — most importantly — the index "no-leak on re-parse" invariant.
+provenance/patch parsing, the per-tool parsers, the API `/api/sessions` sort whitelist and `/api/search`
+role filter, and — most importantly — the index "no-leak on re-parse" invariant.
 
 ## What it does
 

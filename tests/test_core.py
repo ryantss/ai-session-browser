@@ -4,6 +4,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -21,6 +22,15 @@ def fresh_conn():
 def counts(conn):
     return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
             for t in ("sessions", "messages", "usage", "tool_events", "fts", "tool_fts")}
+
+
+def make_handler(conn):
+    """A Handler bound to `conn` without running BaseHTTPRequestHandler.__init__
+    (which expects a live socket). The API methods only touch self.conn / self.lock."""
+    h = object.__new__(server.Handler)
+    h.conn = conn
+    h.lock = threading.Lock()
+    return h
 
 
 class TestPricing(unittest.TestCase):
@@ -342,6 +352,90 @@ class TestOpenCodeParser(unittest.TestCase):
                 self.assertEqual(s4["skipped"], 1)
             finally:
                 server.discover = orig
+
+
+class TestApiSessionsSort(unittest.TestCase):
+    """The `sort` whitelist on /api/sessions (server.api_sessions)."""
+
+    def setUp(self):
+        self.conn = fresh_conn()
+        # (id, project, cost, msg_count, ended) — chosen so every sort key reorders differently.
+        rows = [
+            (1, "zebra", 1.0, 10, "2026-01-03T00:00:00Z"),
+            (2, "alpha", 5.0, 2,  "2026-01-01T00:00:00Z"),
+            (3, "",      0.0, 50, "2026-01-02T00:00:00Z"),  # blank project
+        ]
+        for sid, proj, cost, mc, ended in rows:
+            self.conn.execute(
+                "INSERT INTO sessions(id,tool,sid,path,project,cost_usd,msg_count,started,ended)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (sid, "claude", f"s{sid}", f"/p{sid}", proj, cost, mc, ended, ended))
+        self.h = make_handler(self.conn)
+
+    def ids(self, sort):
+        return [s["id"] for s in self.h.api_sessions({"sort": [sort]})["sessions"]]
+
+    def projects(self, sort):
+        return [s["project"] for s in self.h.api_sessions({"sort": [sort]})["sessions"]]
+
+    def test_recent_default_is_ended_desc(self):
+        self.assertEqual(self.ids("recent"), [1, 3, 2])
+        # omitting the param entirely behaves like recent
+        self.assertEqual([s["id"] for s in self.h.api_sessions({})["sessions"]], [1, 3, 2])
+
+    def test_project_alpha_then_blank_last(self):
+        self.assertEqual(self.projects("project"), ["alpha", "zebra", ""])
+
+    def test_cost_descending(self):
+        self.assertEqual(self.ids("cost"), [2, 1, 3])
+
+    def test_messages_descending(self):
+        self.assertEqual(self.ids("messages"), [3, 1, 2])
+
+    def test_unknown_sort_falls_back_to_recent(self):
+        self.assertEqual(self.ids("garbage"), self.ids("recent"))
+
+    def test_project_filter_composes_with_sort(self):
+        out = self.h.api_sessions({"project": ["alpha"], "sort": ["cost"]})["sessions"]
+        self.assertEqual([s["id"] for s in out], [2])
+
+
+class TestApiSearchRole(unittest.TestCase):
+    """The `role` filter on /api/search (server.api_search)."""
+
+    def setUp(self):
+        self.conn = fresh_conn()
+        self.conn.execute(
+            "INSERT INTO sessions(id,tool,sid,path,project) VALUES(1,'claude','s1','/p','proj')")
+        for idx, role, text in [
+            (0, "user",      "the quick brown fox"),
+            (1, "assistant", "lazy dog jumps"),
+            (2, "assistant", "fox runs fast"),
+        ]:
+            self.conn.execute("INSERT INTO fts(text,session_id,idx,role) VALUES(?,?,?,?)",
+                              (text, 1, idx, role))
+        self.h = make_handler(self.conn)
+
+    def hits(self, **q):
+        q.setdefault("q", ["fox"])
+        res = self.h.api_search(q)["results"]
+        return sum(r["hits"] for r in res), len(res)
+
+    def test_all_roles(self):
+        # "fox" appears in one user msg and one assistant msg → 2 hits in 1 session
+        self.assertEqual(self.hits(), (2, 1))
+
+    def test_user_only(self):
+        self.assertEqual(self.hits(role=["user"]), (1, 1))
+
+    def test_assistant_only(self):
+        self.assertEqual(self.hits(role=["assistant"]), (1, 1))
+
+    def test_unknown_role_behaves_like_all(self):
+        self.assertEqual(self.hits(role=["bogus"]), (2, 1))
+
+    def test_empty_query_returns_nothing(self):
+        self.assertEqual(self.h.api_search({"q": [""]})["results"], [])
 
 
 if __name__ == "__main__":

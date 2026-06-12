@@ -47,6 +47,8 @@
     border-radius:999px;background:var(--paper);color:var(--ink);font-size:13px;outline:none;}
   .searchbox input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
   .hint{font-size:11px;color:var(--muted);}
+  .qscope{display:flex;gap:4px;}
+  .qscope .chip{padding:3px 9px;font-size:11px;cursor:pointer;}
   .refreshbtn{margin-left:auto;display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);
     background:var(--card);color:var(--ink);border-radius:999px;padding:7px 13px;font-size:12.5px;font-weight:500;}
   .refreshbtn:hover{border-color:var(--accent);color:var(--accent);}
@@ -60,6 +62,14 @@
   .proj:hover{background:var(--card);}
   .proj[aria-pressed="true"]{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent);}
   .proj .n{color:var(--muted);font-variant-numeric:tabular-nums;}
+  .sb-head{position:sticky;top:0;z-index:1;background:var(--paper);padding:0 14px 8px;border-bottom:1px solid var(--line);margin-bottom:4px;}
+  .sb-head h5{margin:8px 0 6px;}
+  .proj-filter{width:100%;box-sizing:border-box;padding:5px 9px;font-size:12px;border:1px solid var(--line);
+    border-radius:8px;background:var(--card);color:var(--ink);outline:none;}
+  .proj-filter:focus{border-color:var(--accent);}
+  .proj-sort{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px;}
+  .proj-sort .chip{padding:2px 8px;font-size:10.5px;cursor:pointer;}
+  .proj-empty{padding:10px 14px;font-size:12px;color:var(--muted);}
 
   .list{border-right:1px solid var(--line);overflow-y:auto;background:var(--paper);}
   .filters{display:flex;gap:6px;padding:9px 12px;flex-wrap:wrap;position:sticky;top:0;
@@ -67,6 +77,12 @@
   .chip{padding:4px 11px;border-radius:999px;border:1px solid var(--line);background:var(--card);font-size:12px;color:var(--muted);}
   .chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff;}
   .chip .pill{font-variant-numeric:tabular-nums;opacity:.7;margin-left:4px;}
+  .f-sort{margin-left:auto;font-family:inherit;font-size:12px;font-weight:500;padding:4px 24px 4px 10px;
+    border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);cursor:pointer;
+    -webkit-appearance:none;appearance:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%236f675c' fill='none' stroke-width='1.5'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 9px center;}
+  .f-sort:focus{border-color:var(--accent);outline:none;}
   select,input[type=date]{font-family:inherit;font-size:11.5px;padding:3px 6px;border:1px solid var(--line);
     border-radius:7px;background:var(--card);color:var(--ink);}
 
@@ -301,6 +317,11 @@
     </div>
     <div class="searchbox" id="searchwrap">
       <input id="q" type="search" placeholder="Search all sessions...  (try: bigquery refund)" autocomplete="off">
+      <div class="qscope" id="qscope" title="Limit search to message type">
+        <button class="chip" data-role="" aria-pressed="true">All</button>
+        <button class="chip" data-role="user" aria-pressed="false">Your prompts</button>
+        <button class="chip" data-role="assistant" aria-pressed="false">Assistant</button>
+      </div>
       <span class="hint" id="qhint"></span>
     </div>
   </header>
@@ -366,7 +387,7 @@ const ago = iso => { if(!iso) return ''; const d=new Date(iso); if(isNaN(d)) ret
   if(s<86400) return Math.floor(s/3600)+'h ago'; if(s<2592000) return Math.floor(s/86400)+'d ago';
   return Math.floor(s/2592000)+'mo ago'; };
 
-let state = {view:'browse', tool:'', project:'', from:'', to:'', mode:'list', selected:null};
+let state = {view:'browse', tool:'', project:'', from:'', to:'', sort:'recent', searchRole:'', projFilter:'', projSort:'activity', mode:'list', selected:null};
 
 ['theme','accent','font'].forEach(k=>{ const v=localStorage.getItem('sb_'+k); if(v) document.documentElement.dataset[k]=v; });
 function syncTweaks(){ document.querySelectorAll('[data-set]').forEach(b=>
@@ -544,6 +565,10 @@ function renderFilters(){
     html += '<input type="date" id="f-from" title="from" value="'+state.from+'">'
           + '<input type="date" id="f-to" title="to" value="'+state.to+'">';
   }
+  const so=(v,l)=>'<option value="'+v+'"'+(state.sort===v?' selected':'')+'>'+l+'</option>';
+  html += '<select class="f-sort" id="f-sort" title="Sort sessions">'
+        + so('recent','↓ Recent')+so('project','↓ Project')+so('cost','↓ Cost')+so('messages','↓ Messages')
+        + '</select>';
   F.innerHTML = html;
   F.querySelectorAll('.chip[data-tool]').forEach(c=> c.onclick=()=>{ state.tool=c.dataset.tool; refreshChips(); reloadList(); });
   F.querySelectorAll('.chip[data-range]').forEach(c=> c.onclick=()=>{ applyRange(c.dataset.range);
@@ -551,19 +576,47 @@ function renderFilters(){
   const ff=$('#f-from'), ft=$('#f-to');
   if(ff) ff.onchange=e=>{ state.from=e.target.value; reloadList(); };
   if(ft) ft.onchange=e=>{ state.to=e.target.value; reloadList(); };
+  const fs=$('#f-sort'); if(fs) fs.onchange=e=>{ state.sort=e.target.value; reloadList(); };
 }
 function refreshChips(){ document.querySelectorAll('.chip[data-tool]').forEach(c=>
   c.setAttribute('aria-pressed', c.dataset.tool===state.tool)); }
+// Cache the project list (ordered by activeness) so filter/sort are instant — no API refetch per keystroke.
+let PROJECTS=null;
 async function loadSidebar(){
   const r = await api('/api/projects');
+  PROJECTS = r.projects || [];
+  renderSidebar();
+}
+function renderSidebar(){
+  if(!PROJECTS) return;
+  const sb=(v,l)=>'<button class="chip" data-psort="'+v+'" aria-pressed="'+(state.projSort===v)+'">'+l+'</button>';
+  $('#sidebar').innerHTML =
+    '<div class="sb-head"><h5>Projects &middot; '+PROJECTS.length+'</h5>'
+    + '<input class="proj-filter" id="proj-filter" type="search" placeholder="Filter projects…" value="'+esc(state.projFilter)+'">'
+    + '<div class="proj-sort">'+sb('activity','Recent')+sb('name','Name')+sb('sessions','Sessions')+sb('cost','Cost')+'</div></div>'
+    + '<div id="proj-list"></div>';
+  const fi=$('#proj-filter');
+  fi.oninput=e=>{ state.projFilter=e.target.value; renderProjList(); };
+  $('#sidebar').querySelectorAll('[data-psort]').forEach(b=> b.onclick=()=>{ state.projSort=b.dataset.psort;
+    $('#sidebar').querySelectorAll('[data-psort]').forEach(x=>x.setAttribute('aria-pressed', x.dataset.psort===state.projSort));
+    renderProjList(); });
+  renderProjList();
+}
+function renderProjList(){
+  const q=state.projFilter.trim().toLowerCase();
+  const s=state.projSort;
+  const list = PROJECTS.filter(p=> !q || (p.project||'').toLowerCase().includes(q)).slice().sort((a,b)=>
+      s==='name'     ? (a.project||'').localeCompare(b.project||'')
+    : s==='sessions' ? (b.n-a.n)
+    : s==='cost'     ? ((b.cost||0)-(a.cost||0))
+    :                  (b.last||'').localeCompare(a.last||''));   // activity: most recent first
   const mk=p=>'<div class="proj" data-p="'+esc(p.project)+'" aria-pressed="'+(state.project===p.project)+'">'
      +'<span>'+esc(p.project)+'</span><span class="n">'+p.n+'</span></div>';
-  $('#sidebar').innerHTML = '<h5>Projects &middot; '+r.projects.length+'</h5>'
-    + '<div class="proj" data-p="" aria-pressed="'+(state.project==='')+'"><span>All projects</span><span class="n">'+(STATS?STATS.total:'')+'</span></div>'
-    + r.projects.map(mk).join('');
-  $('#sidebar').querySelectorAll('.proj').forEach(p=> p.onclick=()=>{
+  const allRow = q ? '' : '<div class="proj" data-p="" aria-pressed="'+(state.project==='')+'"><span>All projects</span><span class="n">'+(STATS?STATS.total:'')+'</span></div>';
+  $('#proj-list').innerHTML = allRow + list.map(mk).join('') + (list.length?'':'<div class="proj-empty">No projects match.</div>');
+  $('#proj-list').querySelectorAll('.proj').forEach(p=> p.onclick=()=>{
     state.project=p.dataset.p;
-    $('#sidebar').querySelectorAll('.proj').forEach(x=>x.setAttribute('aria-pressed', x.dataset.p===state.project));
+    document.querySelectorAll('#proj-list .proj').forEach(x=>x.setAttribute('aria-pressed', x.dataset.p===state.project));
     reloadList(); });
 }
 
@@ -572,6 +625,7 @@ function listParams(extra){
   const p=Object.assign({}, extra||{});
   if(state.tool) p.tool=state.tool; if(state.project) p.project=state.project;
   if(state.from) p.from=state.from; if(state.to) p.to=state.to;
+  if(state.sort && state.sort!=='recent') p.sort=state.sort;
   return p;
 }
 function reloadList(){
@@ -599,7 +653,7 @@ function renderRows(items, isSearch){
         +b.cost+'<span>'+(s.msg_count||0)+' msgs</span>'+b.hits+'</div>'
         +'<div class="title">'+(esc(s.title)||'(untitled)')+'</div>'+b.snip+'</div></div>';
     }).join('');
-  } else if(L==='logbook' || L==='chronicle'){
+  } else if((L==='logbook' || L==='chronicle') && (!state.sort || state.sort==='recent')){
     const rgb=accentRGB(); const withSpark=(L==='logbook');
     html = groupByDay(items).map((g,gi)=>{
       const collapse = (L==='chronicle' && gi>=2);
@@ -676,10 +730,15 @@ async function openSession(id){
 let searchTimer=null;
 $('#q').addEventListener('input', e=>{ clearTimeout(searchTimer); const v=e.target.value.trim();
   searchTimer=setTimeout(()=> v?runSearch():loadSessions(), 220); });
+$('#qscope').querySelectorAll('.chip').forEach(b=> b.onclick=()=>{
+  state.searchRole=b.dataset.role;
+  $('#qscope').querySelectorAll('.chip').forEach(x=>x.setAttribute('aria-pressed', x.dataset.role===state.searchRole));
+  if($('#q').value.trim()) runSearch(); });
 async function runSearch(){
   const q=$('#q').value.trim(); if(!q){ loadSessions(); return; }
   state.mode='search'; $('#rows').innerHTML='<div class="loading">Searching...</div>';
-  const r = await api('/api/search', listParams({q}));
+  const p=listParams({q}); if(state.searchRole) p.role=state.searchRole;
+  const r = await api('/api/search', p);
   if(r.error){ $('#qhint').textContent=r.error; $('#rows').innerHTML='<div class="loading">'+esc(r.error)+'</div>'; return; }
   $('#qhint').textContent = r.results.length+' session'+(r.results.length!==1?'s':'');
   renderRows(r.results, true);
