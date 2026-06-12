@@ -247,6 +247,35 @@
   /* ===== ledger: analytics-first emphasis ===== */
   [data-layout="ledger"] #view-analytics .kpi .v{font-size:30px;}
   [data-layout="ledger"] #view-analytics .kpi{padding:17px 19px;}
+
+  /* ===== pixel: cream canvas + chunky ink borders + hard offset shadows ===== */
+  [data-layout="pixel"]{--paper:#eeefe9;--ink:#151515;--muted:#4d4f46;--line:#151515;
+    --card:#ffffff;--accent:#f54e00;--accent-soft:#fce0d3;--radius:6px;
+    --shadow:3px 3px 0 var(--ink);
+    --claude:#f54e00;--codex:#1d4aff;--gemini:#dc9300;}
+  [data-layout="pixel"] .brand .title{font-weight:700;}
+  [data-layout="pixel"] .seg,[data-layout="pixel"] .refreshbtn,
+  [data-layout="pixel"] .layoutsel select,[data-layout="pixel"] .searchbox input{
+    border:1.5px solid var(--ink);border-radius:6px;}
+  [data-layout="pixel"] .searchbox input:focus{border-color:var(--ink);box-shadow:3px 3px 0 var(--accent);}
+  /* rows become bordered cards with a hard offset shadow */
+  [data-layout="pixel"] .list{padding:0 14px 50px;}
+  [data-layout="pixel"] .filters{margin:0 -14px;padding-left:16px;padding-right:16px;}
+  [data-layout="pixel"] #rows{display:flex;flex-direction:column;gap:10px;}
+  [data-layout="pixel"] .dayhead{padding-left:2px;padding-right:2px;}
+  [data-layout="pixel"] .row{border:1.5px solid var(--ink);border-radius:6px;background:var(--card);
+    padding:11px 13px;box-shadow:3px 3px 0 var(--ink);transition:transform .1s,box-shadow .1s;}
+  [data-layout="pixel"] .row:hover{transform:translate(-1px,-1px);box-shadow:4px 4px 0 var(--ink);}
+  [data-layout="pixel"] .row.active{background:var(--accent-soft);transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink);}
+  [data-layout="pixel"] .row .meta{font-variant-numeric:tabular-nums;}
+  [data-layout="pixel"] .cost{border:1px solid var(--ink);border-radius:4px;font-family:var(--mono);font-weight:600;}
+  /* numerals in mono; cards (KPI / panel / project) get the same hard shadow */
+  [data-layout="pixel"] .kpi,[data-layout="pixel"] .panel,[data-layout="pixel"] .pcard{
+    border:1.5px solid var(--ink);border-radius:6px;box-shadow:3px 3px 0 var(--ink);}
+  [data-layout="pixel"] .pcard:hover{transform:translate(-1px,-1px);box-shadow:4px 4px 0 var(--ink);border-color:var(--ink);}
+  [data-layout="pixel"] .pcard.top{border-color:var(--ink);}
+  [data-layout="pixel"] .kpi .v,[data-layout="pixel"] .pcard .pv{font-family:var(--mono);font-weight:700;}
+  [data-layout="pixel"] .pcard .pv small{font-family:var(--mono);}
 </style>
 </head>
 <body>
@@ -267,7 +296,7 @@
         <option value="ledger">Ledger</option>
         <option value="atlas">Atlas</option>
         <option value="terminal">Terminal</option>
-        <option value="posthog">PostHog</option>
+        <option value="pixel">Pixel</option>
       </select>
     </div>
     <div class="searchbox" id="searchwrap">
@@ -306,6 +335,7 @@
     <button class="tbtn" data-set="layout" data-val="ledger">Ledger</button>
     <button class="tbtn" data-set="layout" data-val="atlas">Atlas</button>
     <button class="tbtn" data-set="layout" data-val="terminal">Terminal</button>
+    <button class="tbtn" data-set="layout" data-val="pixel">Pixel</button>
   </div></div>
   <div class="grp"><h4>Theme</h4><div class="opts">
     <button class="tbtn" data-set="theme" data-val="light">Light</button>
@@ -348,7 +378,7 @@ document.querySelectorAll('[data-set]').forEach(b=> b.onclick=()=>{
 $('#gear').onclick=()=> $('#tweaks').classList.toggle('open'); syncTweaks();
 
 // ---- layout switcher (chronicle / logbook / ledger / atlas / terminal) ----
-const LAYOUTS=[['chronicle','Chronicle'],['logbook','Logbook'],['ledger','Ledger'],['atlas','Atlas'],['terminal','Terminal']];
+const LAYOUTS=[['chronicle','Chronicle'],['logbook','Logbook'],['ledger','Ledger'],['atlas','Atlas'],['terminal','Terminal'],['pixel','Pixel']];
 state.layout = localStorage.getItem('sb_layout') || 'chronicle';
 state.range = 'all'; state.atlasMap = false; state.atlasSort = 'activity';
 document.documentElement.dataset.layout = state.layout;
