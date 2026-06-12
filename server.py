@@ -1241,6 +1241,7 @@ class Handler(BaseHTTPRequestHandler):
         branch = (q.get("branch", [""])[0] or "").strip()
         dfrom = (q.get("from", [""])[0] or "").strip()
         dto = (q.get("to", [""])[0] or "").strip()
+        sort = (q.get("sort", ["recent"])[0] or "recent").strip()
         limit = min(int(q.get("limit", ["300"])[0]), 2000)
         where, args = [], []
         if tool:
@@ -1259,7 +1260,13 @@ class Handler(BaseHTTPRequestHandler):
                "git_branch,cost_usd,in_tokens,out_tokens FROM sessions")
         if where:
             sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY (ended IS NULL OR ended=''), ended DESC, started DESC LIMIT ?"
+        order_by = {
+            "recent":   "(ended IS NULL OR ended=''), ended DESC, started DESC",
+            "project":  "project='', project COLLATE NOCASE ASC, ended DESC",
+            "cost":     "cost_usd DESC, ended DESC",
+            "messages": "msg_count DESC, ended DESC",
+        }
+        sql += " ORDER BY " + order_by.get(sort, order_by["recent"]) + " LIMIT ?"
         args.append(limit)
         with self.lock:
             rows = self.conn.execute(sql, args).fetchall()
@@ -1297,6 +1304,7 @@ class Handler(BaseHTTPRequestHandler):
     def api_search(self, q):
         raw = (q.get("q", [""])[0] or "").strip()
         tool = (q.get("tool", [""])[0] or "").strip()
+        role = (q.get("role", [""])[0] or "").strip()
         limit = min(int(q.get("limit", ["80"])[0]), 300)
         if not raw:
             return {"results": [], "query": raw}
@@ -1314,6 +1322,8 @@ class Handler(BaseHTTPRequestHandler):
         args = [match]
         if tool:
             sql += " AND s.tool=?"; args.append(tool)
+        if role in ("user", "assistant"):
+            sql += " AND f.role=?"; args.append(role)
         sql += " ORDER BY rank LIMIT ?"
         args.append(max(limit * 8, 400))
         with self.lock:
