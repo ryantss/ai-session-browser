@@ -1,4 +1,5 @@
 """Core invariant tests for ai-session-browser. Stdlib only: `python3 -m unittest`."""
+import json
 import os
 import sqlite3
 import sys
@@ -116,7 +117,7 @@ class TestDeleteAndIndex(unittest.TestCase):
             conn = fresh_conn()
             orig = server.discover
             try:
-                server.discover = lambda: [("claude", fpath, fake_parser)]
+                server.discover = lambda: [("claude", str(fpath), fake_parser, None)]
                 server.index(conn)
                 first = counts(conn)
                 server.index(conn, force=True)   # re-parse same file
@@ -132,6 +133,215 @@ class TestDeleteAndIndex(unittest.TestCase):
             # cost rolled onto the session: 100*5/1e6 + 50*25/1e6 = 0.00175
             cost = conn.execute("SELECT cost_usd FROM sessions WHERE id=1").fetchone()[0]
             self.assertAlmostEqual(cost, 0.00175, places=6)
+
+
+class TestModelNormalization(unittest.TestCase):
+    def setUp(self):
+        server.load_prices()
+
+    def test_provider_prefix(self):
+        self.assertIsNotNone(server.price_for("openai/gpt-5.5"))
+        self.assertEqual(server.price_for("openai/gpt-5.5"), server.price_for("gpt-5.5"))
+
+    def test_bedrock_id(self):
+        self.assertEqual(server.price_for("us.anthropic.claude-opus-4-6-v1"),
+                         server.price_for("claude-opus-4-6"))
+
+    def test_free_suffix(self):
+        self.assertEqual(server.price_for("deepseek/deepseek-v4-flash:free"),
+                         server.price_for("deepseek-v4-flash"))
+
+    def test_bare_models_unchanged(self):  # regression guard
+        self.assertIsNotNone(server.price_for("claude-opus-4-8"))
+        self.assertIsNotNone(server.price_for("gpt-5.5"))
+
+
+class TestPiParser(unittest.TestCase):
+    def _write(self, d, lines):
+        p = Path(d) / "2026-01-01T00-00-00-000Z_sid.jsonl"
+        p.write_text("\n".join(json.dumps(o) for o in lines))
+        return p
+
+    def test_cost_passthrough(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, [
+                {"type": "session", "id": "sid", "cwd": "/repo", "timestamp": "2026-01-01T00:00:00Z"},
+                {"type": "model_change", "modelId": "openrouter/owl-alpha"},
+                {"type": "message", "timestamp": "2026-01-01T00:01:00Z",
+                 "message": {"role": "user", "content": [{"type": "text", "text": "do it"}]}},
+                {"type": "message", "timestamp": "2026-01-01T00:02:00Z",
+                 "message": {"role": "assistant", "model": "openrouter/owl-alpha",
+                             "content": [{"type": "text", "text": "done"},
+                                         {"type": "toolCall", "name": "bash",
+                                          "arguments": {"command": "ls -la"}}],
+                             "usage": {"input": 100, "output": 50, "cacheRead": 0, "cacheWrite": 0,
+                                       "cost": {"total": 0.42}}}},
+            ])
+            meta, msgs, tes, usage = server.parse_pi(p)
+            self.assertEqual(meta["tool"], "pi")
+            self.assertEqual(len(usage), 1)
+            self.assertAlmostEqual(usage[0]["cost_usd"], 0.42)
+            self.assertTrue(any(t["kind"] == "command" and t["command"] == "ls -la" for t in tes))
+
+            # end-to-end through index(): agent cost wins over the (absent) table price
+            conn = fresh_conn()
+            orig = server.discover
+            try:
+                server.discover = lambda: [("pi", str(p), server._wrap_file_parser(server.parse_pi), None)]
+                server.index(conn)
+            finally:
+                server.discover = orig
+            row = conn.execute("SELECT cost_usd, cost_source FROM usage").fetchone()
+            self.assertAlmostEqual(row["cost_usd"], 0.42)
+            self.assertEqual(row["cost_source"], "agent")
+            scost = conn.execute("SELECT cost_usd FROM sessions").fetchone()[0]
+            self.assertAlmostEqual(scost, 0.42)
+
+    def test_no_messages_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, [
+                {"type": "session", "id": "sid", "cwd": "/r", "timestamp": "2026-01-01T00:00:00Z"},
+                {"type": "model_change", "modelId": "x/y"},
+            ])
+            self.assertIsNone(server.parse_pi(p))
+
+
+class TestHermesParser(unittest.TestCase):
+    def test_huge_meta_and_no_usage(self):
+        with tempfile.TemporaryDirectory() as d:
+            big_tools = [{"name": f"tool_{i}", "schema": "x" * 200} for i in range(60)]
+            p = Path(d) / "20260101_000000_hash.jsonl"
+            p.write_text("\n".join(json.dumps(o) for o in [
+                {"role": "session_meta", "model": "gpt-5.5", "session_id": "h1",
+                 "timestamp": "2026-01-01T00:00:00Z", "tools": big_tools},
+                {"role": "user", "content": "do it", "timestamp": "2026-01-01T00:01:00Z"},
+                {"role": "assistant", "content": "", "timestamp": "2026-01-01T00:02:00Z",
+                 "tool_calls": [{"function": {"name": "bash", "arguments": '{"command": "ls"}'}}]},
+            ]))
+            self.assertGreater(p.stat().st_size, 5000)  # meta line really is large
+            meta, msgs, tes, usage = server.parse_hermes(p)
+            self.assertEqual(meta["model"], "gpt-5.5")
+            self.assertEqual(usage, [])
+            self.assertEqual(len(msgs), 2)  # session_meta is NOT a message
+            self.assertTrue(any(t["kind"] == "command" and t["command"] == "ls" for t in tes))
+
+
+class TestLMStudioParser(unittest.TestCase):
+    def test_versions(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "1700000000000.conversation.json"
+            p.write_text(json.dumps({
+                "name": "chat", "createdAt": 1700000000000,
+                "messages": [
+                    {"currentlySelected": 0, "versions": [
+                        {"role": "user", "type": "singleStep",
+                         "content": [{"type": "text", "text": "hello"}]}]},
+                    {"currentlySelected": 0, "versions": [
+                        {"role": "assistant", "type": "multiStep",
+                         "steps": [{"type": "contentBlock", "content": [{"type": "text", "text": "hi back"}]}]}]},
+                ]}))
+            meta, msgs, tes, usage = server.parse_lmstudio(p)
+            self.assertEqual([m["role"] for m in msgs], ["user", "assistant"])
+            self.assertEqual(msgs[0]["text"], "hello")
+            self.assertEqual(msgs[1]["text"], "hi back")
+
+
+def _make_opencode_db(path, sessions):
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, title TEXT,
+            time_created INTEGER, time_updated INTEGER);
+        CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);
+        CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,
+            time_created INTEGER, data TEXT);
+    """)
+    for s in sessions:
+        conn.execute("INSERT INTO session(id,directory,title,time_created,time_updated)"
+                     " VALUES(?,?,?,?,?)",
+                     (s["id"], s["directory"], s.get("title", ""),
+                      s["time_created"], s["time_updated"]))
+        for i, m in enumerate(s["messages"]):
+            mid = f'{s["id"]}-m{i}'
+            conn.execute("INSERT INTO message(id,session_id,time_created,data) VALUES(?,?,?,?)",
+                         (mid, s["id"], i, json.dumps(m["data"])))
+            for j, pd in enumerate(m.get("parts", [])):
+                conn.execute("INSERT INTO part(id,message_id,session_id,time_created,data)"
+                             " VALUES(?,?,?,?,?)",
+                             (f"{mid}-p{j}", mid, s["id"], j, json.dumps(pd)))
+    conn.commit()
+    conn.close()
+
+
+def _oc_discover(db):
+    return lambda: [("opencode", f"{db}#{sid}",
+                     (lambda _k, _s=sid: server.parse_opencode_session(db, _s)), mt)
+                    for sid, mt in server.opencode_sessions(db)]
+
+
+class TestOpenCodeParser(unittest.TestCase):
+    def _sessions(self):
+        return [
+            {"id": "A", "directory": "/work/proj-a", "time_created": 1700000000000,
+             "time_updated": 1700000100000, "messages": [
+                {"data": {"role": "user"}, "parts": [{"type": "text", "text": "fix bug"}]},
+                {"data": {"role": "assistant", "modelID": "ollama/qwen", "cost": 0.0,
+                          "tokens": {"input": 10, "output": 20, "cache": {"read": 0, "write": 0}}},
+                 "parts": [{"type": "text", "text": "on it"},
+                           {"type": "tool", "tool": "bash",
+                            "state": {"input": {"command": "pytest"}}},
+                           {"type": "patch", "files": ["/work/proj-a/x.py"]}]}]},
+            {"id": "B", "directory": "/work/proj-b", "time_created": 1700000200000,
+             "time_updated": 1700000300000, "messages": [
+                {"data": {"role": "user"}, "parts": [{"type": "text", "text": "hello B"}]}]},
+        ]
+
+    def test_multi_session(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = str(Path(d) / "opencode.db")
+            _make_opencode_db(db, self._sessions())
+            conn = fresh_conn()
+            orig = server.discover
+            try:
+                server.discover = _oc_discover(db)
+                server.index(conn)
+            finally:
+                server.discover = orig
+            self.assertEqual(counts(conn)["sessions"], 2)
+            # session A: 1 command (bash) + 1 file (patch) event
+            kinds = [r["kind"] for r in conn.execute("SELECT kind FROM tool_events")]
+            self.assertIn("command", kinds)
+            self.assertIn("file", kinds)
+            # cost passthrough: ollama row recorded with agent source (free => 0.0)
+            row = conn.execute("SELECT cost_usd, cost_source FROM usage").fetchone()
+            self.assertEqual(row["cost_source"], "agent")
+            self.assertAlmostEqual(row["cost_usd"], 0.0)
+
+    def test_no_leak_and_incremental(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = str(Path(d) / "opencode.db")
+            _make_opencode_db(db, self._sessions())
+            conn = fresh_conn()
+            orig = server.discover
+            try:
+                server.discover = _oc_discover(db)
+                s1 = server.index(conn)
+                first = counts(conn)
+                s2 = server.index(conn, force=True)   # re-parse all
+                second = counts(conn)
+                self.assertEqual(first, second, "DB re-parse leaked rows")
+                self.assertEqual(s1["new"], 2)
+
+                # incrementality: untouched run skips both; bumping one reparses only it
+                s3 = server.index(conn)
+                self.assertEqual(s3["skipped"], 2)
+                wconn = sqlite3.connect(db)
+                wconn.execute("UPDATE session SET time_updated=? WHERE id='A'", (1700000900000,))
+                wconn.commit(); wconn.close()
+                s4 = server.index(conn)
+                self.assertEqual(s4["updated"], 1)
+                self.assertEqual(s4["skipped"], 1)
+            finally:
+                server.discover = orig
 
 
 if __name__ == "__main__":

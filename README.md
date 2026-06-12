@@ -1,7 +1,8 @@
 # session-browser
 
 Local web UI to **browse, full-text search, cost-analyze, and trace** your AI coding session
-history across **Claude Code**, **Codex CLI**, and **Gemini CLI** — in one place.
+history across **Claude Code**, **Codex CLI**, **Gemini CLI**, **Pi**, **Hermes**, **OpenCode**,
+and **LM Studio** — in one place.
 
 Zero third-party dependencies: Python 3 stdlib only (`sqlite3` + `http.server`). Works offline
 (the Markdown renderer is hand-rolled — no CDN).
@@ -56,6 +57,11 @@ provenance/patch parsing, and — most importantly — the index "no-leak on re-
   - Claude Code — `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`
   - Codex CLI — `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
   - Gemini CLI — `~/.gemini/tmp/<name|hash>/chats/session-*.{json,jsonl}`
+  - Pi — `~/.pi/agent/sessions/<encoded-cwd>/*.jsonl` (carries its own per-message USD cost)
+  - Hermes — `~/.hermes/sessions/*.jsonl`
+  - OpenCode — `~/.local/share/opencode/opencode.db` (one SQLite DB, many sessions)
+  - LM Studio — `~/.lmstudio/conversations/*.conversation.json`
+  - Paperclip-wrapped Codex — `~/.paperclip/instances/*/codex-home/sessions/**/rollout-*.jsonl`
 - **Normalizes** each tool's distinct schema into a common `{role, ts, text}` message shape. Tool
   calls/results are inlined as searchable markers; auth/info/error noise is skipped.
 - **Extracts** token usage (per model) and tool events (files touched, commands run) — Claude
@@ -100,5 +106,16 @@ under `~/.cache`, never inside this repo.
 
 ## Adding another tool
 
-Write a `parse_<tool>(path)` returning `(meta, messages, tool_events, usage)` and register it in
-`discover()` in `server.py`. The normalized message shape means the UI and search need no changes.
+For a **file-per-session** tool, add a row to `_FILE_SOURCES` in `server.py` (tool name, root,
+glob mode, pattern, parser) and write `parse_<tool>(path) -> (meta, messages, tool_events, usage)`.
+`discover()` yields `(tool, key, parser, mtime)`; for file sources `mtime` is `None` (the file is
+stat-ed). The normalized message shape means the UI and search need no changes.
+
+For a **multi-session store** (e.g. a single SQLite DB like OpenCode), enumerate sessions in
+`discover()` and yield a virtual `key="<db>#<session_id>"` plus that session's own `mtime`, with a
+parser closure bound to the id — so each session re-indexes incrementally through the same path.
+
+If an agent reports its own spend, set `cost_usd` on its `usage` rows: the indexer stores it with
+`cost_source="agent"`, honors it over the embedded price table, and preserves it across
+`GET /api/reindex?reprice=1`. Model ids are normalized (provider prefixes like `openai/`, bedrock
+ids, and `:free` suffixes) before price lookup.

@@ -5,9 +5,9 @@ description: "Launch a local web UI to browse, full-text search, cost-analyze, a
 
 # AI Session Browser
 
-A zero-dependency local tool that indexes every Claude Code, Codex CLI, and Gemini CLI session
-transcript into a SQLite FTS5 full-text index and serves a single-page web UI to browse and search
-them.
+A zero-dependency local tool that indexes every Claude Code, Codex CLI, Gemini CLI, Pi, Hermes,
+OpenCode, and LM Studio session transcript into a SQLite FTS5 full-text index and serves a
+single-page web UI to browse and search them.
 
 ## When to use
 
@@ -35,6 +35,10 @@ Flags: `--port N`, `--reindex` (force full rebuild), `--no-open`. Env: `SESSION_
 | Claude | `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`   | JSONL per record  |
 | Codex  | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`    | JSONL per record  |
 | Gemini | `~/.gemini/tmp/<name|hash>/chats/session-*.{json,jsonl}` | JSON / JSONL |
+| Pi     | `~/.pi/agent/sessions/<encoded-cwd>/*.jsonl`      | JSONL (embeds USD cost) |
+| Hermes | `~/.hermes/sessions/*.jsonl`                       | JSONL per record  |
+| OpenCode | `~/.local/share/opencode/opencode.db`           | SQLite (many sessions) |
+| LM Studio | `~/.lmstudio/conversations/*.conversation.json` | JSON per chat   |
 
 Each transcript is normalized to `{role, ts, text}` messages. User + assistant turns are indexed;
 tool calls and results are kept inline as markers (`[tool: ...]`, `[tool_result] ...`) so they're
@@ -73,5 +77,10 @@ then `GET /api/reindex?reprice=1`. Unknown models cost $0 and are surfaced in th
 
 ## Extending to a new tool
 
-Add a `parse_<tool>(path)` function returning `(meta, messages)` and register it in `discover()`.
-The normalized message shape keeps the UI and search untouched.
+For a file-per-session tool, add a row to `_FILE_SOURCES` and write
+`parse_<tool>(path) -> (meta, messages, tool_events, usage)`. `discover()` yields
+`(tool, key, parser, mtime)` — file sources pass `mtime=None`. For a single multi-session store
+(like OpenCode's SQLite DB), enumerate sessions in `discover()` and yield a virtual
+`key="<db>#<id>"` with that session's own `mtime` and a parser closure bound to the id. If the agent
+records its own cost, set `cost_usd` on usage rows (stored as `cost_source="agent"`, preserved
+across reprice). The normalized message shape keeps the UI and search untouched.
