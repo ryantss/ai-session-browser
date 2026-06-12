@@ -77,6 +77,9 @@ DEFAULT_PRICES = {
     "gpt-5.4":           {"input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 0.0},
     "gpt-5.4-mini":      {"input": 0.25, "output": 2.0,  "cache_read": 0.025, "cache_write": 0.0},
     "gpt-5.5":           {"input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 0.0},
+    # Other providers (Pi & OpenCode supply authoritative cost; these are fallbacks):
+    "deepseek-v4-pro":   {"input": 0.6,  "output": 1.7,  "cache_read": 0.07,  "cache_write": 0.0},
+    "deepseek-v4-flash": {"input": 0.07, "output": 0.30, "cache_read": 0.01,  "cache_write": 0.0},
 }
 
 _PRICES = dict(DEFAULT_PRICES)
@@ -99,16 +102,38 @@ def load_prices():
 
 
 _DATE_SUFFIX_RE = re.compile(r"-\d{8}$")
+_BEDROCK_RE = re.compile(r"^(?:us|eu|apac)\.anthropic\.(.+?)(?:-v\d+)?$")
+_PROVIDER_PREFIX_RE = re.compile(r"^(?:[A-Za-z0-9._-]+/)+")
+
+
+def _normalize_model(model: str) -> str:
+    """Collapse provider-prefixed / bedrock / ':free' model ids to a bare key.
+
+    'openai/gpt-5.5' -> 'gpt-5.5', 'deepseek/deepseek-v4-flash:free' ->
+    'deepseek-v4-flash', 'us.anthropic.claude-opus-4-6-v1' -> 'claude-opus-4-6'.
+    """
+    if not model:
+        return model
+    m = model.split(":", 1)[0]            # drop ':free' / ':<n>' suffix
+    bd = _BEDROCK_RE.match(m)
+    if bd:
+        m = bd.group(1)
+    m = _PROVIDER_PREFIX_RE.sub("", m)    # strip leading 'provider/' segments
+    return m
 
 
 def price_for(model: str):
-    """Look up a model's price, tolerating a trailing -YYYYMMDD snapshot suffix."""
+    """Look up a model's price, tolerating provider prefixes, bedrock ids, a ':free'
+    suffix, and a trailing -YYYYMMDD snapshot suffix."""
     if not model:
         return None
-    p = _PRICES.get(model)
-    if p is None:
-        p = _PRICES.get(_DATE_SUFFIX_RE.sub("", model))
-    return p
+    for key in (model, _normalize_model(model)):
+        if not key:
+            continue
+        p = _PRICES.get(key) or _PRICES.get(_DATE_SUFFIX_RE.sub("", key))
+        if p:
+            return p
+    return None
 
 
 def cost_for(model: str, in_tok: int, out_tok: int,
@@ -514,26 +539,452 @@ def parse_gemini(path: Path):
 
 
 # ---------------------------------------------------------------------------
+# Pi — ~/.pi/agent/sessions/<encoded-cwd>/<ts>_<uuid>.jsonl
+# JSONL event stream; messages carry typed content blocks AND embedded USD cost.
+# ---------------------------------------------------------------------------
+
+_PI_FILE_TOOLS = {"read", "edit", "write", "str_replace", "str_replace_editor",
+                  "create", "apply_patch", "multiedit"}
+
+
+def pi_text(content) -> str:
+    """Pi message content is a string OR a list of typed blocks."""
+    if isinstance(content, str):
+        return content
+    parts = []
+    for b in content or []:
+        if not isinstance(b, dict):
+            continue
+        t = b.get("type")
+        if t == "text":
+            parts.append(b.get("text", ""))
+        elif t == "thinking":
+            parts.append("[thinking] " + (b.get("text") or b.get("thinking", "")))
+        elif t == "toolCall":
+            inp = json.dumps(b.get("arguments", {}), ensure_ascii=False)
+            parts.append(f"[tool: {b.get('name', '?')}] {inp[:800]}")
+        elif t == "image":
+            parts.append("[image]")
+    return "\n".join(p for p in parts if p)
+
+
+def parse_pi(path: Path):
+    cwd = model = sid = start = end = ""
+    messages = []
+    tool_events = []
+    usage = {}          # model -> token accumulator
+    cost_by_model = {}  # model -> summed authoritative USD cost
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(o, dict):
+                    continue
+                t = o.get("type")
+                if t == "session":
+                    sid = o.get("id") or sid
+                    cwd = o.get("cwd") or cwd
+                    start = norm_ts(o.get("timestamp")) or start
+                elif t == "model_change":
+                    model = o.get("modelId") or model
+                elif t == "message":
+                    msg = o.get("message") or {}
+                    role = msg.get("role")
+                    if role not in ("user", "assistant"):
+                        continue
+                    msg_model = msg.get("model") or model
+                    if msg_model:
+                        model = msg_model
+                    ts = norm_ts(o.get("timestamp"))
+                    text = _clip(pi_text(msg.get("content")))
+                    if text.strip() and not is_noise(text):
+                        if not start:
+                            start = ts
+                        end = ts or end
+                        midx = len(messages)
+                        messages.append({"role": role, "ts": ts, "text": text})
+                        content = msg.get("content")
+                        if isinstance(content, list):
+                            for b in content:
+                                if not isinstance(b, dict) or b.get("type") != "toolCall":
+                                    continue
+                                name = b.get("name", "")
+                                args = b.get("arguments")
+                                if not isinstance(args, dict):
+                                    args = {}
+                                low = name.lower()
+                                if low in ("bash", "shell", "exec", "run"):
+                                    ev = _te_cmd(midx, ts, name, args.get("command") or args.get("cmd"))
+                                elif low in _PI_FILE_TOOLS:
+                                    ev = _te_file(midx, ts, name,
+                                                  args.get("path") or args.get("file_path") or args.get("filePath"), cwd)
+                                else:
+                                    ev = None
+                                if ev:
+                                    tool_events.append(ev)
+                    u = msg.get("usage")
+                    if isinstance(u, dict) and msg_model:
+                        acc = usage.setdefault(msg_model, _zero_usage())
+                        acc["in_tokens"] += u.get("input", 0) or 0
+                        acc["out_tokens"] += u.get("output", 0) or 0
+                        acc["cache_read_tokens"] += u.get("cacheRead", 0) or 0
+                        acc["cache_creation_tokens"] += u.get("cacheWrite", 0) or 0
+                        c = u.get("cost")
+                        if isinstance(c, dict) and isinstance(c.get("total"), (int, float)):
+                            cost_by_model[msg_model] = cost_by_model.get(msg_model, 0.0) + c["total"]
+    except Exception:
+        return None
+    if not messages:
+        return None
+    rows = _usage_list(usage)
+    for r in rows:
+        if r["model"] in cost_by_model:
+            r["cost_usd"] = cost_by_model[r["model"]]
+    project = Path(cwd).name if cwd else ""
+    meta = {"tool": "pi", "sid": sid or path.stem, "cwd": cwd,
+            "project": project, "started": start, "ended": end,
+            "model": model, "git_branch": ""}
+    return meta, messages, tool_events, rows
+
+
+# ---------------------------------------------------------------------------
+# Hermes — ~/.hermes/sessions/<ts>_<hash>.jsonl (ignore the parallel session_*.json)
+# JSONL records; ChatGPT/codex backend => no token usage in logs (cost = $0).
+# ---------------------------------------------------------------------------
+
+_HERMES_FILE_TOOLS = {"read", "write", "edit", "str_replace", "str_replace_editor",
+                      "apply_patch", "create_file", "multiedit"}
+
+
+def parse_hermes(path: Path):
+    model = sid = start = end = ""
+    messages = []
+    tool_events = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(o, dict):
+                    continue
+                role = o.get("role")
+                ts = norm_ts(o.get("timestamp"))
+                if role == "session_meta":
+                    model = o.get("model") or model
+                    sid = o.get("session_id") or sid
+                    start = norm_ts(o.get("timestamp")) or start
+                    continue
+                if role not in ("user", "assistant"):
+                    continue  # skip 'tool' outputs and other roles
+                content = o.get("content")
+                text = content if isinstance(content, str) else codex_text(content)
+                tool_calls = o.get("tool_calls") or []
+                if tool_calls and not (text or "").strip():
+                    names = ", ".join((tc.get("function") or {}).get("name", "?")
+                                      for tc in tool_calls if isinstance(tc, dict))
+                    text = f"[tool: {names}]"
+                text = _clip(text or "")
+                if not text.strip() or is_noise(text):
+                    continue
+                if not start:
+                    start = ts
+                end = ts or end
+                midx = len(messages)
+                messages.append({"role": role, "ts": ts, "text": text})
+                for tc in tool_calls:
+                    if not isinstance(tc, dict):
+                        continue
+                    fn = tc.get("function") or {}
+                    name = fn.get("name", "?")
+                    try:
+                        args = json.loads(fn.get("arguments") or "{}")
+                    except Exception:
+                        args = {}
+                    if not isinstance(args, dict):
+                        args = {}
+                    low = name.lower()
+                    if low in ("bash", "shell", "exec", "run", "terminal"):
+                        ev = _te_cmd(midx, ts, name, args.get("command") or args.get("cmd"))
+                    elif low in _HERMES_FILE_TOOLS:
+                        ev = _te_file(midx, ts, name,
+                                      args.get("path") or args.get("file_path") or args.get("filePath"))
+                    else:
+                        ev = None
+                    if ev:
+                        tool_events.append(ev)
+    except Exception:
+        return None
+    if not messages:
+        return None
+    meta = {"tool": "hermes", "sid": sid or path.stem, "cwd": "",
+            "project": "", "started": start, "ended": end,
+            "model": model, "git_branch": ""}
+    return meta, messages, tool_events, []
+
+
+# ---------------------------------------------------------------------------
+# LM Studio — ~/.lmstudio/conversations/<epoch>.conversation.json (single JSON doc)
+# Local chat; no tool events / usage. Each message carries selectable versions.
+# ---------------------------------------------------------------------------
+
+def _lmstudio_text(version) -> str:
+    if not isinstance(version, dict):
+        return ""
+    parts = []
+
+    def _blocks(blocks):
+        for b in blocks or []:
+            if isinstance(b, dict) and b.get("type") == "text":
+                parts.append(b.get("text", ""))
+
+    _blocks(version.get("content"))
+    for step in version.get("steps") or []:
+        if isinstance(step, dict):
+            _blocks(step.get("content"))
+    return "\n".join(p for p in parts if p)
+
+
+def parse_lmstudio(path: Path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            obj = json.load(fh)
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    created = norm_ts(obj.get("createdAt"))
+    model = ""
+    lum = obj.get("lastUsedModel")
+    if isinstance(lum, dict):
+        model = lum.get("identifier") or lum.get("modelKey") or ""
+    messages = []
+    for m in obj.get("messages") or []:
+        if not isinstance(m, dict):
+            continue
+        versions = m.get("versions") or []
+        if not versions:
+            continue
+        sel = m.get("currentlySelected") or 0
+        if not isinstance(sel, int) or sel < 0 or sel >= len(versions):
+            sel = 0
+        ver = versions[sel]
+        role = (ver or {}).get("role")
+        if role not in ("user", "assistant"):
+            continue
+        text = _clip(_lmstudio_text(ver))
+        if not text.strip():
+            continue
+        messages.append({"role": role, "ts": created, "text": text})
+    if not messages:
+        return None
+    meta = {"tool": "lmstudio", "sid": path.stem, "cwd": "",
+            "project": "", "started": created, "ended": created,
+            "model": model, "git_branch": ""}
+    return meta, messages, [], []
+
+
+# ---------------------------------------------------------------------------
+# OpenCode — ~/.local/share/opencode/opencode.db (one SQLite DB, MANY sessions).
+# session/message/part rows; message & part content is JSON in a `data` column.
+# ---------------------------------------------------------------------------
+
+_OPENCODE_FILE_TOOLS = {"read", "write", "edit", "patch", "multiedit"}
+
+
+def opencode_sessions(db_path):
+    """Return [(session_id, mtime_secs)] for every OpenCode session (cheap, no parse)."""
+    out = []
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            for r in conn.execute("SELECT id, time_updated FROM session"):
+                tu = r[1] or 0
+                out.append((r[0], (tu / 1000.0) if tu else 0.0))
+        finally:
+            conn.close()
+    except Exception:
+        return []
+    return out
+
+
+def parse_opencode_session(db_path, sid):
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            srow = conn.execute(
+                "SELECT directory, title, time_created, time_updated FROM session WHERE id=?",
+                (sid,)).fetchone()
+            if not srow:
+                return None
+            mrows = conn.execute(
+                "SELECT id, data FROM message WHERE session_id=? ORDER BY time_created, id",
+                (sid,)).fetchall()
+            prows = conn.execute(
+                "SELECT message_id, data FROM part WHERE session_id=? ORDER BY time_created, id",
+                (sid,)).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+    parts_by_msg = {}
+    for pr in prows:
+        try:
+            pd = json.loads(pr["data"])
+        except Exception:
+            continue
+        parts_by_msg.setdefault(pr["message_id"], []).append(pd)
+
+    cwd = srow["directory"] or ""
+    start = norm_ts(srow["time_created"])
+    end = norm_ts(srow["time_updated"])
+    messages = []
+    tool_events = []
+    usage = {}
+    cost_by_model = {}
+    model_counts = {}
+
+    for mr in mrows:
+        try:
+            md = json.loads(mr["data"])
+        except Exception:
+            continue
+        role = md.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        m_model = md.get("modelID") or ""
+        tinfo = md.get("time")
+        ts = norm_ts(tinfo.get("created")) if isinstance(tinfo, dict) else ""
+        midx = len(messages)
+        text_parts = []
+        for pd in parts_by_msg.get(mr["id"], []):
+            pt = pd.get("type")
+            if pt == "text":
+                text_parts.append(pd.get("text", ""))
+            elif pt == "reasoning":
+                text_parts.append("[thinking] " + pd.get("text", ""))
+            elif pt == "tool":
+                inp = (pd.get("state") or {}).get("input") or {}
+                if not isinstance(inp, dict):
+                    inp = {}
+                tname = pd.get("tool", "?")
+                text_parts.append(f"[tool: {tname}] {json.dumps(inp, ensure_ascii=False)[:800]}")
+                low = str(tname).lower()
+                if low in ("bash", "shell"):
+                    ev = _te_cmd(midx, ts, tname, inp.get("command") or inp.get("cmd"))
+                    if ev:
+                        tool_events.append(ev)
+                elif low in _OPENCODE_FILE_TOOLS:
+                    ev = _te_file(midx, ts, tname,
+                                  inp.get("filePath") or inp.get("path") or inp.get("file_path"), cwd)
+                    if ev:
+                        tool_events.append(ev)
+            elif pt == "patch":
+                files = pd.get("files") or []
+                if isinstance(files, dict):
+                    files = list(files.keys())
+                text_parts.append("[patch] " + ", ".join(str(f) for f in files))
+                for f in files:
+                    ev = _te_file(midx, ts, "patch", f, cwd)
+                    if ev:
+                        tool_events.append(ev)
+        text = _clip("\n".join(p for p in text_parts if p))
+        if not text.strip():
+            continue
+        if m_model:
+            model_counts[m_model] = model_counts.get(m_model, 0) + 1
+        if not start:
+            start = ts
+        end = ts or end
+        messages.append({"role": role, "ts": ts, "text": text})
+        tok = md.get("tokens")
+        if isinstance(tok, dict) and m_model:
+            acc = usage.setdefault(m_model, _zero_usage())
+            acc["in_tokens"] += tok.get("input", 0) or 0
+            acc["out_tokens"] += (tok.get("output", 0) or 0) + (tok.get("reasoning", 0) or 0)
+            cache = tok.get("cache")
+            if isinstance(cache, dict):
+                acc["cache_read_tokens"] += cache.get("read", 0) or 0
+                acc["cache_creation_tokens"] += cache.get("write", 0) or 0
+        c = md.get("cost")
+        if isinstance(c, (int, float)) and m_model:
+            cost_by_model[m_model] = cost_by_model.get(m_model, 0.0) + c
+
+    if not messages:
+        return None
+    model = max(model_counts, key=model_counts.get) if model_counts else ""
+    rows = _usage_list(usage)
+    for r in rows:
+        if r["model"] in cost_by_model:
+            r["cost_usd"] = cost_by_model[r["model"]]
+    project = Path(cwd).name if cwd else (srow["title"] or "")
+    meta = {"tool": "opencode", "sid": str(sid), "cwd": cwd,
+            "project": project, "started": start, "ended": end,
+            "model": model, "git_branch": ""}
+    return meta, messages, tool_events, rows
+
+
+# ---------------------------------------------------------------------------
 # File discovery
 # ---------------------------------------------------------------------------
 
+# File-glob sources: (tool, root, mode, pattern, parser). One file == one session.
+_FILE_SOURCES = [
+    ("claude",   HOME / ".claude" / "projects",       "rglob", "*.jsonl",             parse_claude),
+    ("codex",    HOME / ".codex" / "sessions",         "rglob", "rollout-*.jsonl",     parse_codex),
+    ("gemini",   HOME / ".gemini" / "tmp",             "glob",  "*/chats/*",           parse_gemini),
+    ("pi",       HOME / ".pi" / "agent" / "sessions",  "rglob", "*.jsonl",             parse_pi),
+    ("hermes",   HOME / ".hermes" / "sessions",        "glob",  "*.jsonl",             parse_hermes),
+    ("lmstudio", HOME / ".lmstudio" / "conversations", "glob",  "*.conversation.json", parse_lmstudio),
+]
+
+
+def _wrap_file_parser(fn):
+    return lambda key: fn(Path(key))
+
+
 def discover():
-    """Yield (tool, path, parser) for every candidate session file."""
-    claude_root = HOME / ".claude" / "projects"
-    if claude_root.is_dir():
-        for p in claude_root.rglob("*.jsonl"):
-            yield ("claude", p, parse_claude)
+    """Yield (tool, key, parser, mtime) for every candidate session.
 
-    codex_root = HOME / ".codex" / "sessions"
-    if codex_root.is_dir():
-        for p in codex_root.rglob("rollout-*.jsonl"):
-            yield ("codex", p, parse_codex)
+    File sources: ``key`` is the file path and ``mtime`` is None (the indexer stats
+    the file). DB sources (OpenCode): ``key`` is ``'<db>#<session_id>'`` and ``mtime``
+    is supplied from the session row so each session re-indexes on its own.
+    """
+    for tool, root, mode, pattern, parser in _FILE_SOURCES:
+        if not root.is_dir():
+            continue
+        it = root.rglob(pattern) if mode == "rglob" else root.glob(pattern)
+        wrapped = _wrap_file_parser(parser)
+        for p in it:
+            if tool == "gemini" and p.suffix not in (".json", ".jsonl"):
+                continue
+            yield (tool, str(p), wrapped, None)
 
-    gemini_root = HOME / ".gemini" / "tmp"
-    if gemini_root.is_dir():
-        for p in gemini_root.glob("*/chats/*"):
-            if p.suffix in (".json", ".jsonl"):
-                yield ("gemini", p, parse_gemini)
+    # Paperclip wraps Codex sessions — reuse parse_codex, label them as codex.
+    pc_root = HOME / ".paperclip" / "instances"
+    if pc_root.is_dir():
+        wrapped = _wrap_file_parser(parse_codex)
+        for p in pc_root.glob("*/codex-home/sessions/**/rollout-*.jsonl"):
+            yield ("codex", str(p), wrapped, None)
+
+    # OpenCode — one SQLite DB holds many sessions; yield a virtual key per session.
+    oc_db = HOME / ".local" / "share" / "opencode" / "opencode.db"
+    if oc_db.is_file():
+        for sid, mtime in opencode_sessions(oc_db):
+            yield ("opencode", f"{oc_db}#{sid}",
+                   (lambda _k, _s=sid: parse_opencode_session(oc_db, _s)), mtime)
 
 
 # ---------------------------------------------------------------------------
@@ -562,7 +1013,7 @@ CREATE TABLE IF NOT EXISTS usage (
     session_id INTEGER, model TEXT,
     in_tokens INTEGER DEFAULT 0, out_tokens INTEGER DEFAULT 0,
     cache_read_tokens INTEGER DEFAULT 0, cache_creation_tokens INTEGER DEFAULT 0,
-    cost_usd REAL DEFAULT 0
+    cost_usd REAL DEFAULT 0, cost_source TEXT DEFAULT 'table'
 );
 CREATE INDEX IF NOT EXISTS idx_usage_session ON usage(session_id);
 CREATE INDEX IF NOT EXISTS idx_usage_model   ON usage(model);
@@ -589,6 +1040,9 @@ _SESSION_MIGRATIONS = {
     "cache_creation_tokens": "INTEGER DEFAULT 0", "cost_usd": "REAL DEFAULT 0",
 }
 
+# Columns added to `usage` after v0.2 — ALTERed in on existing DBs.
+_USAGE_MIGRATIONS = {"cost_source": "TEXT DEFAULT 'table'"}
+
 
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -600,6 +1054,10 @@ def connect() -> sqlite3.Connection:
     for col, decl in _SESSION_MIGRATIONS.items():
         if col not in have:
             conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} {decl}")
+    have_u = {r["name"] for r in conn.execute("PRAGMA table_info(usage)")}
+    for col, decl in _USAGE_MIGRATIONS.items():
+        if col not in have_u:
+            conn.execute(f"ALTER TABLE usage ADD COLUMN {col} {decl}")
     conn.commit()
     return conn
 
@@ -618,22 +1076,25 @@ def index(conn, force=False, progress=lambda *_: None):
                 for row in conn.execute("SELECT id, path, mtime FROM sessions")}
     seen_paths = set()
     n_new = n_upd = n_skip = n_total = 0
-    by_tool = {"claude": 0, "codex": 0, "gemini": 0}
+    by_tool = {}
 
-    for tool, path, parser in discover():
+    for tool, key, parser, src_mtime in discover():
         n_total += 1
-        spath = str(path)
+        spath = key
         seen_paths.add(spath)
-        try:
-            mtime = path.stat().st_mtime
-        except OSError:
-            continue
+        if src_mtime is not None:
+            mtime = src_mtime
+        else:
+            try:
+                mtime = Path(key).stat().st_mtime
+            except OSError:
+                continue
         prev = existing.get(spath)
         if prev and not force and abs(prev[1] - mtime) < 1e-6:
             n_skip += 1
             continue
 
-        parsed = parser(path)
+        parsed = parser(key)
         if parsed is None:
             if prev:
                 _delete_session_rows(conn, prev[0])
@@ -654,8 +1115,13 @@ def index(conn, force=False, progress=lambda *_: None):
         s_in = s_out = s_cr = s_cc = 0
         s_cost = 0.0
         for u in usage:
-            c = cost_for(u["model"], u["in_tokens"], u["out_tokens"],
-                         u["cache_read_tokens"], u["cache_creation_tokens"])
+            if u.get("cost_usd") is not None:
+                c = u["cost_usd"]            # authoritative cost reported by the agent
+                u["cost_source"] = "agent"
+            else:
+                c = cost_for(u["model"], u["in_tokens"], u["out_tokens"],
+                             u["cache_read_tokens"], u["cache_creation_tokens"])
+                u["cost_source"] = "table"
             u["cost_usd"] = c
             s_in += u["in_tokens"]; s_out += u["out_tokens"]
             s_cr += u["cache_read_tokens"]; s_cc += u["cache_creation_tokens"]
@@ -679,9 +1145,9 @@ def index(conn, force=False, progress=lambda *_: None):
         if usage:
             conn.executemany(
                 "INSERT INTO usage(session_id,model,in_tokens,out_tokens,cache_read_tokens,"
-                "cache_creation_tokens,cost_usd) VALUES(?,?,?,?,?,?,?)",
+                "cache_creation_tokens,cost_usd,cost_source) VALUES(?,?,?,?,?,?,?,?)",
                 [(sess_id, u["model"], u["in_tokens"], u["out_tokens"], u["cache_read_tokens"],
-                  u["cache_creation_tokens"], u["cost_usd"]) for u in usage])
+                  u["cache_creation_tokens"], u["cost_usd"], u.get("cost_source", "table")) for u in usage])
         if tool_events:
             te_rows = [(sess_id, e["idx"], e["ts"], e["kind"], e["name"], e["path"], e["command"])
                        for e in tool_events]
@@ -933,7 +1399,7 @@ class Handler(BaseHTTPRequestHandler):
         for m in by_model:
             p = price_for(m["model"] or "")
             if not p:
-                if m["model"]:
+                if m["model"] and not m["cost_usd"]:  # agent-costed models aren't "unpriced"
                     unpriced.append(m["model"])
                 continue
             cache_savings += m["cache_read_tokens"] * max(0, p.get("input", 0) - p.get("cache_read", 0)) / 1_000_000
@@ -1029,9 +1495,11 @@ class Handler(BaseHTTPRequestHandler):
     def _reprice(self):
         """Recompute cost_usd from stored token columns without re-parsing files."""
         rows = self.conn.execute(
-            "SELECT id, model, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens"
-            " FROM usage").fetchall()
+            "SELECT id, model, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens,"
+            " cost_source FROM usage").fetchall()
         for r in rows:
+            if r["cost_source"] == "agent":
+                continue  # preserve authoritative agent-reported cost
             c = cost_for(r["model"], r["in_tokens"], r["out_tokens"],
                          r["cache_read_tokens"], r["cache_creation_tokens"])
             self.conn.execute("UPDATE usage SET cost_usd=? WHERE id=?", (c, r["id"]))
@@ -1061,12 +1529,13 @@ def main():
     def prog(total, new, upd, skip):
         print(f"  …{total} files ({new} new, {upd} updated, {skip} unchanged)", flush=True)
 
-    print("Indexing sessions (Claude / Codex / Gemini)…", flush=True)
+    print("Indexing sessions (Claude / Codex / Gemini / Pi / Hermes / OpenCode / LM Studio)…", flush=True)
     stats = index(conn, force=args.reindex, progress=prog)
     bt = stats["by_tool"]
     print(f"Indexed {stats['total']} files: {stats['new']} new, {stats['updated']} updated, "
           f"{stats['skipped']} unchanged.", flush=True)
-    print(f"  by tool this run -> claude:{bt.get('claude',0)} codex:{bt.get('codex',0)} gemini:{bt.get('gemini',0)}", flush=True)
+    if bt:
+        print("  by tool this run -> " + "  ".join(f"{k}:{v}" for k, v in sorted(bt.items())), flush=True)
 
     Handler.conn = conn
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)

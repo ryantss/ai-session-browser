@@ -47,6 +47,10 @@
     border-radius:999px;background:var(--paper);color:var(--ink);font-size:13px;outline:none;}
   .searchbox input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
   .hint{font-size:11px;color:var(--muted);}
+  .refreshbtn{margin-left:auto;display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);
+    background:var(--card);color:var(--ink);border-radius:999px;padding:7px 13px;font-size:12.5px;font-weight:500;}
+  .refreshbtn:hover{border-color:var(--accent);color:var(--accent);}
+  .refreshbtn:disabled{opacity:.6;cursor:default;}
 
   .view{overflow:hidden;}
   .browse{display:grid;grid-template-columns:210px 380px 1fr;overflow:hidden;height:100%;}
@@ -172,6 +176,7 @@
       <button data-view="provenance">Provenance</button>
     </div>
     <div class="stats" id="stats"></div>
+    <button id="refreshbtn" class="refreshbtn" title="Re-index — pick up newly created sessions">&#8635; Refresh</button>
     <div class="searchbox" id="searchwrap">
       <input id="q" type="search" placeholder="Search all sessions...  (try: bigquery refund)" autocomplete="off">
       <span class="hint" id="qhint"></span>
@@ -493,6 +498,19 @@ async function runProv(q){
   box.querySelectorAll('.copy').forEach(b=> b.onclick=()=>{ navigator.clipboard.writeText(b.dataset.copy);
     const o=b.textContent; b.textContent='copied'; setTimeout(()=>b.textContent=o,1200); });
 }
+
+// refresh: re-index on the server, then reload the current view
+$('#refreshbtn').onclick = async () => {
+  const b = $('#refreshbtn'); if(b.disabled) return;
+  b.disabled = true; const o = b.innerHTML; b.innerHTML = '&#8635; Indexing…';
+  try {
+    await api('/api/reindex');
+    await loadStats();
+    if (state.view === 'analytics') loadAnalytics();
+    else if (state.view === 'provenance') loadProvenance();
+    else { loadSidebar(); reloadList(); }
+  } finally { b.disabled = false; b.innerHTML = o; }
+};
 
 // init
 loadStats().then(()=>{ loadSidebar(); loadSessions(); });
