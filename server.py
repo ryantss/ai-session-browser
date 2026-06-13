@@ -1071,6 +1071,10 @@ def _delete_session_rows(conn, session_id):
     conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
 
 
+# UTC ISO timestamp of the most recent index() run (in-memory; reset each process start).
+LAST_INDEXED = None
+
+
 def index(conn, force=False, progress=lambda *_: None):
     existing = {row["path"]: (row["id"], row["mtime"])
                 for row in conn.execute("SELECT id, path, mtime FROM sessions")}
@@ -1168,6 +1172,8 @@ def index(conn, force=False, progress=lambda *_: None):
             _delete_session_rows(conn, sid)
 
     conn.commit()
+    global LAST_INDEXED
+    LAST_INDEXED = datetime.now(timezone.utc).isoformat()
     return {"total": n_total, "new": n_new, "updated": n_upd,
             "skipped": n_skip, "by_tool": by_tool}
 
@@ -1230,7 +1236,7 @@ class Handler(BaseHTTPRequestHandler):
                 "SELECT tool, COUNT(*) n, SUM(msg_count) msgs, MIN(started) mn, MAX(ended) mx"
                 " FROM sessions GROUP BY tool").fetchall()
         total = sum(r["n"] for r in rows)
-        return {"total": total,
+        return {"total": total, "last_indexed": LAST_INDEXED,
                 "tools": [{"tool": r["tool"], "sessions": r["n"], "messages": r["msgs"] or 0,
                            "earliest": r["mn"], "latest": r["mx"]} for r in rows]}
 
