@@ -261,7 +261,16 @@ def derive_title(messages) -> str:
 
 
 def norm_ts(ts) -> str:
-    """Return an ISO-8601 string for any timestamp shape we encounter."""
+    """Return a canonical UTC ISO-8601 string (``...+00:00``) for any timestamp
+    shape we encounter, so every stored value is directly comparable.
+
+    Sorting (SQL ``ORDER BY ended``, the sidebar/list ``localeCompare``) is purely
+    lexical, which is only correct when all values share one canonical form. Tools
+    disagree: Claude logs ``...Z``, others log explicit offsets, and Hermes logs
+    naive *local* wall-clock times with no offset. We coerce them all to UTC.
+    Naive timestamps are interpreted as local time (Hermes' convention); aware
+    ones are converted. Unparseable strings are returned unchanged rather than
+    dropped."""
     if not ts:
         return ""
     if isinstance(ts, (int, float)):
@@ -269,7 +278,15 @@ def norm_ts(ts) -> str:
             return datetime.fromtimestamp(ts / (1000 if ts > 1e12 else 1), timezone.utc).isoformat()
         except Exception:
             return ""
-    return str(ts)
+    s = str(ts).strip()
+    if not s:
+        return ""
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return s  # unknown shape; keep the raw value rather than lose data
+    # Naive .astimezone(utc) treats the value as local time, matching Hermes.
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------

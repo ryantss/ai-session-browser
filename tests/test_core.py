@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -68,6 +69,65 @@ class TestPricing(unittest.TestCase):
             finally:
                 server.PRICES_PATH = old
                 server.load_prices()
+
+
+class TestTimestampNormalization(unittest.TestCase):
+    """norm_ts must canonicalize every timestamp shape to one comparable UTC form,
+    so lexical sorting (SQL `ORDER BY ended`, frontend localeCompare) is correct.
+    Regression: Hermes logs naive *local* wall-clock times (no offset); comparing
+    them lexically against Claude's `...Z` UTC strings misordered the session list."""
+
+    def setUp(self):
+        # Pin local tz so naive-timestamp handling is deterministic (UTC+8).
+        self._tz = os.environ.get("TZ")
+        if hasattr(time, "tzset"):
+            os.environ["TZ"] = "Asia/Singapore"
+            time.tzset()
+
+    def tearDown(self):
+        if hasattr(time, "tzset"):
+            if self._tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = self._tz
+            time.tzset()
+
+    def test_zulu_normalized_to_offset(self):
+        # Claude's `...Z` must become a uniform +00:00 form (not left as Z).
+        out = server.norm_ts("2026-06-14T16:27:07.830Z")
+        self.assertTrue(out.endswith("+00:00"), out)
+        self.assertEqual(out, "2026-06-14T16:27:07.830000+00:00")
+
+    def test_naive_local_converted_to_utc(self):
+        # Hermes-style naive local time (UTC+8) -> UTC.
+        if not hasattr(time, "tzset"):
+            self.skipTest("tzset unavailable")
+        self.assertEqual(server.norm_ts("2026-05-22T18:00:00"),
+                         "2026-05-22T10:00:00+00:00")
+
+    def test_explicit_offset_preserved_as_utc(self):
+        self.assertEqual(server.norm_ts("2026-01-07T06:17:06.501000+00:00"),
+                         "2026-01-07T06:17:06.501000+00:00")
+
+    def test_epoch_seconds_and_millis(self):
+        self.assertEqual(server.norm_ts(1_700_000_000), "2023-11-14T22:13:20+00:00")
+        self.assertEqual(server.norm_ts(1_700_000_000_000), "2023-11-14T22:13:20+00:00")
+
+    def test_empty_and_garbage(self):
+        self.assertEqual(server.norm_ts(None), "")
+        self.assertEqual(server.norm_ts(""), "")
+        # Unparseable strings are returned as-is rather than dropped.
+        self.assertEqual(server.norm_ts("not-a-date"), "not-a-date")
+
+    def test_canonical_forms_sort_chronologically(self):
+        # The exact bug: hermes-local 18:07 (=10:07 UTC) vs codex 10:54 UTC, same date.
+        # Real order (oldest->newest): hermes 10:07 < codex 10:54 < claude next-day.
+        if not hasattr(time, "tzset"):
+            self.skipTest("tzset unavailable")
+        hermes = server.norm_ts("2026-05-22T18:07:59.351218")   # local +8 -> 10:07 UTC
+        codex = server.norm_ts("2026-05-22T10:54:18.603Z")
+        claude = server.norm_ts("2026-05-23T03:28:40.916Z")
+        self.assertEqual(sorted([claude, codex, hermes]), [hermes, codex, claude])
 
 
 class TestExtractionHelpers(unittest.TestCase):
