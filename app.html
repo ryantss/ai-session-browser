@@ -68,7 +68,7 @@
   .browse.side-hidden .side-reopen{display:block;}
   .side-reopen:hover{color:var(--accent);}
   /* layouts that hide the sidebar entirely never need the collapse affordances */
-  [data-layout="logbook"] .side-reopen,[data-layout="atlas"] .side-reopen,[data-layout="terminal"] .side-reopen{display:none!important;}
+  [data-layout="logbook"] .side-reopen,[data-layout="atlas"] .side-reopen{display:none!important;}
   #detail.session.outline-hidden .outline{display:none;}
   /* shortcuts help (reuses .cmdk backdrop) */
   .sc-box{width:520px;padding:18px 20px 6px;}
@@ -275,8 +275,7 @@
 
   /* ===== per-layout grid + sidebar ===== */
   [data-layout="logbook"] .browse,[data-layout="atlas"] .browse{grid-template-columns:400px minmax(0,1fr);}
-  [data-layout="terminal"] .browse{grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);}
-  [data-layout="logbook"] .sidebar,[data-layout="atlas"] .sidebar,[data-layout="terminal"] .sidebar{display:none;}
+  [data-layout="logbook"] .sidebar,[data-layout="atlas"] .sidebar{display:none;}
 
   /* ===== chronicle: cost-heat left border ===== */
   [data-layout="chronicle"] .row{border-left:3px solid transparent;}
@@ -290,28 +289,6 @@
     padding:11px 14px;box-shadow:var(--shadow);}
   [data-layout="logbook"] .row.active{box-shadow:var(--shadow);outline:2px solid var(--accent);}
   [data-layout="logbook"] .row .stamp{font-family:var(--mono);font-size:11px;color:var(--muted);margin-right:2px;}
-
-  /* ===== terminal: dark + mono + sharp numbered rows ===== */
-  [data-layout="terminal"]{--paper:#0f0d0a;--ink:#d6d0c6;--muted:#8b8175;--line:#2a251e;--card:#15120e;--accent-soft:#2c1d13;}
-  [data-layout="terminal"] .brand .title{font-family:var(--mono);font-weight:500;}
-  [data-layout="terminal"] .searchbox input{font-family:var(--mono);border-radius:6px;background:#0b0907;}
-  [data-layout="terminal"] .list{background:var(--paper);}
-  [data-layout="terminal"] #rows .row{border-bottom:1px solid var(--line);border-left:2px solid transparent;
-    border-radius:0;padding:9px 13px 9px 11px;display:grid;grid-template-columns:26px 1fr;gap:9px;align-items:start;}
-  [data-layout="terminal"] #rows .row.claude{border-left-color:var(--claude);}
-  [data-layout="terminal"] #rows .row.codex{border-left-color:var(--codex);}
-  [data-layout="terminal"] #rows .row.gemini{border-left-color:var(--gemini);}
-  [data-layout="terminal"] #rows .row.active{background:var(--accent-soft);box-shadow:none;}
-  [data-layout="terminal"] .rn{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:right;padding-top:2px;}
-  [data-layout="terminal"] .row .title{font-size:13px;font-weight:500;}
-  [data-layout="terminal"] .row .meta{font-family:var(--mono);font-size:11px;}
-  [data-layout="terminal"] .dmeta code,[data-layout="terminal"] .dmeta{font-family:var(--mono);}
-  .termbar{display:none;}
-  [data-layout="terminal"] .termbar{display:flex;gap:18px;position:fixed;left:0;right:0;bottom:0;z-index:15;
-    background:var(--card);border-top:1px solid var(--line);padding:7px 18px;font-family:var(--mono);font-size:11px;color:var(--muted);}
-  [data-layout="terminal"] .termbar b{color:var(--ink);font-weight:500;}
-  [data-layout="terminal"] .termbar .sp{margin-left:auto;}
-  [data-layout="terminal"] .transcript{padding-bottom:60px;}
 
   /* ===== atlas: project-card map ===== */
   .browse.atlasmap{grid-template-columns:minmax(0,1fr)!important;}
@@ -332,10 +309,6 @@
   .pcard .ps{font-size:11px;color:var(--muted);margin-top:4px;font-variant-numeric:tabular-nums;}
   .backbar{display:flex;align-items:center;gap:10px;}
   .backbtn{background:none;border:0;color:var(--accent);font-size:12.5px;font-weight:600;padding:0;cursor:pointer;}
-
-  /* ===== ledger: analytics-first emphasis ===== */
-  [data-layout="ledger"] #view-analytics .kpi .v{font-size:30px;}
-  [data-layout="ledger"] #view-analytics .kpi{padding:17px 19px;}
 
   /* ===== pixel: cream canvas + chunky ink borders + hard offset shadows ===== */
   [data-layout="pixel"]{--paper:#eeefe9;--ink:#151515;--muted:#4d4f46;--line:#151515;
@@ -382,9 +355,7 @@
       <select id="layoutsel" title="Switch UI layout">
         <option value="chronicle">Chronicle</option>
         <option value="logbook">Logbook</option>
-        <option value="ledger">Ledger</option>
         <option value="atlas">Atlas</option>
-        <option value="terminal">Terminal</option>
         <option value="pixel">Pixel</option>
       </select>
     </div>
@@ -418,19 +389,13 @@
   <div class="view prov" id="view-provenance" style="display:none"></div>
 </div>
 
-<div class="termbar" id="termbar">
-  <span><b>j</b>/<b>k</b> navigate</span><span><b>1</b>&ndash;<b>9</b> jump</span><span><b>enter</b> open</span>
-  <span><b>/</b> search</span><span><b>a</b> analytics</span><span><b>?</b> shortcuts</span><span class="sp" id="termcount"></span>
-</div>
 <button class="helpbtn" id="helpbtn" title="Keyboard shortcuts ( ? )">?</button>
 <button class="gear" id="gear" title="Appearance">&#9686;</button>
 <div class="tweaks" id="tweaks">
   <div class="grp"><h4>Layout</h4><div class="opts">
     <button class="tbtn" data-set="layout" data-val="chronicle">Chronicle</button>
     <button class="tbtn" data-set="layout" data-val="logbook">Logbook</button>
-    <button class="tbtn" data-set="layout" data-val="ledger">Ledger</button>
     <button class="tbtn" data-set="layout" data-val="atlas">Atlas</button>
-    <button class="tbtn" data-set="layout" data-val="terminal">Terminal</button>
     <button class="tbtn" data-set="layout" data-val="pixel">Pixel</button>
   </div></div>
   <div class="grp"><h4>Theme</h4><div class="opts">
@@ -519,13 +484,13 @@ $('#side-reopen').onclick=()=>toggleSidebar();
 $('#shortcuts').addEventListener('mousedown', e=>{ if(e.target.id==='shortcuts') toggleShortcuts(); });
 applySidebar();
 
-// ---- layout switcher (chronicle / logbook / ledger / atlas / terminal) ----
-const LAYOUTS=[['chronicle','Chronicle'],['logbook','Logbook'],['ledger','Ledger'],['atlas','Atlas'],['terminal','Terminal'],['pixel','Pixel']];
+// ---- layout switcher (chronicle / logbook / atlas / pixel) ----
+const LAYOUTS=[['chronicle','Chronicle'],['logbook','Logbook'],['atlas','Atlas'],['pixel','Pixel']];
 state.layout = localStorage.getItem('sb_layout') || 'chronicle';
+if(!LAYOUTS.some(l=>l[0]===state.layout)) state.layout='chronicle';
 state.range = 'all'; state.atlasMap = false; state.atlasSort = 'activity';
 document.documentElement.dataset.layout = state.layout;
 function setAtlasMapClass(){ const b=$('#view-browse'); if(b) b.classList.toggle('atlasmap', !!state.atlasMap); }
-function updateTermCount(n){ const el=$('#termcount'); if(el) el.innerHTML='<b>'+num(n)+'</b> shown'; }
 function accentRGB(){ const h=getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
   const m=h.match(/#?([0-9a-fA-F]{6})/); if(!m) return '181,83,42'; const n=parseInt(m[1],16);
   return [(n>>16)&255,(n>>8)&255,n&255].join(','); }
@@ -534,7 +499,6 @@ function setLayout(v){
   state.layout=v; document.documentElement.dataset.layout=v; localStorage.setItem('sb_layout',v);
   const sel=$('#layoutsel'); if(sel) sel.value=v; syncTweaks();
   state.atlasMap = (v==='atlas' && !state.project);
-  if(v==='ledger'){ switchView('analytics'); return; }
   if(state.view==='analytics'){ loadAnalytics(); return; }
   if(state.view==='provenance'){ return; }
   renderFilters(); reloadList();
@@ -764,20 +728,11 @@ async function loadSessions(){
 }
 function renderRows(items, isSearch){
   const el=$('#rows'); const L=state.layout;
-  if(!items.length){ el.innerHTML='<div class="loading">No sessions.</div>'; updateTermCount(0); return; }
+  if(!items.length){ el.innerHTML='<div class="loading">No sessions.</div>'; return; }
   const idOf = s => isSearch ? s.sid : s.id;
   const heatMax = Math.max(0, ...items.map(s=>+s.cost_usd||0));
   let html='';
-  if(L==='terminal'){
-    html = items.map((s,i)=>{ const id=idOf(s), b=rowBits(s,isSearch);
-      return '<div class="row '+s.tool+' '+(state.selected==id?'active':'')+'" data-id="'+id+'">'
-        +'<div class="rn">'+(i+1)+'</div><div>'
-        +'<div class="meta" style="margin:0 0 3px"><span class="tag '+s.tool+'">'+s.tool+'</span>'
-        +'<span class="proj-l">'+esc(s.project||'-')+'</span><span>'+(ago(s.ended)||fmtDate(s.ended))+'</span>'
-        +b.cost+'<span>'+(s.msg_count||0)+' msgs</span>'+b.hits+'</div>'
-        +'<div class="title">'+(esc(s.title)||'(untitled)')+'</div>'+b.snip+'</div></div>';
-    }).join('');
-  } else if((L==='logbook' || L==='chronicle') && (!state.sort || state.sort==='recent')){
+  if((L==='logbook' || L==='chronicle') && (!state.sort || state.sort==='recent')){
     const rgb=accentRGB(); const withSpark=(L==='logbook');
     html = groupByDay(items).map((g,gi)=>{
       const collapse = (L==='chronicle' && gi>=2);
@@ -807,7 +762,6 @@ function renderRows(items, isSearch){
   el.querySelectorAll('.row').forEach(r=> r.onclick=()=> openSession(+r.dataset.id));
   el.querySelectorAll('.dayhead.clp').forEach(h=> h.onclick=()=>{ const g=h.nextElementSibling; if(g) g.classList.toggle('collapsed');
     const c=h.querySelector('.chev'); if(c) c.style.transform = g.classList.contains('collapsed')?'':'rotate(90deg)'; });
-  updateTermCount(items.length);
 }
 
 // ---- detail ----
@@ -1015,8 +969,6 @@ document.addEventListener('keydown', e=>{
   if(e.key==='['){ e.preventDefault(); toggleSidebar(); return; }
   if(e.key==='o'){ e.preventDefault(); toggleOutline(); return; }
   if(state.view!=='browse') return;
-  if(state.layout==='terminal' && /^[1-9]$/.test(e.key)){ const rs=Array.from(document.querySelectorAll('#rows .row'));
-    const r=rs[+e.key-1]; if(r){ r.click(); r.scrollIntoView({block:'nearest'}); } return; }
   const rows=Array.from(document.querySelectorAll('#rows .row')); if(!rows.length) return;
   let i=rows.findIndex(r=>+r.dataset.id===state.selected);
   if(e.key==='j'){ i=Math.min(rows.length-1,i+1); if(rows[i]){rows[i].click(); rows[i].scrollIntoView({block:'nearest'});} }
@@ -1126,8 +1078,7 @@ $('#refreshbtn').onclick = async () => {
 
 // init
 loadStats().then(()=>{ loadSidebar(); initLayoutControls();
-  if(state.layout==='ledger'){ switchView('analytics'); }
-  else { renderFilters(); reloadList(); }
+  renderFilters(); reloadList();
 });
 </script>
 </body>
