@@ -260,6 +260,11 @@ def derive_title(messages) -> str:
     return "(no user prompt)"
 
 
+def now_iso() -> str:
+    """Canonical UTC ISO-8601 timestamp for newly recorded rows."""
+    return datetime.now(timezone.utc).isoformat()
+
+
 def norm_ts(ts) -> str:
     """Return a canonical UTC ISO-8601 string (``...+00:00``) for any timestamp
     shape we encounter, so every stored value is directly comparable.
@@ -1048,6 +1053,22 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
 CREATE VIRTUAL TABLE IF NOT EXISTS tool_fts USING fts5(
     path, command, session_id UNINDEXED, te_id UNINDEXED, tokenize='unicode61'
 );
+-- User-curated collections (bookmarks). Membership keys on the stable
+-- sessions.path, NOT sessions.id (which reindex reassigns), and these tables
+-- are never touched by _delete_session_rows() / the reindex path.
+CREATE TABLE IF NOT EXISTS collections (
+    id INTEGER PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    sort_order INTEGER DEFAULT 0,
+    created TEXT
+);
+CREATE TABLE IF NOT EXISTS collection_items (
+    collection_id INTEGER NOT NULL,
+    session_path  TEXT NOT NULL,
+    added TEXT,
+    PRIMARY KEY (collection_id, session_path)
+);
+CREATE INDEX IF NOT EXISTS idx_ci_path ON collection_items(session_path);
 """
 
 # Columns added to `sessions` after v0.1 — ALTERed in on existing DBs.
@@ -1239,9 +1260,39 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.api_history(q))
             if u.path == "/api/projects":
                 return self._send(200, self.api_projects(q))
+            if u.path == "/api/collections":
+                return self._send(200, self.api_collections())
+            if u.path == "/api/session-collections":
+                return self._send(200, self.api_session_collections(q))
+            if u.path == "/api/bookmarked-paths":
+                return self._send(200, self.api_bookmarked_paths())
             if u.path == "/api/reindex":
                 return self._send(200, self.api_reindex(q))
             return self._send(404, {"error": "not found"})
+        except Exception as e:
+            return self._send(500, {"error": str(e)})
+
+    def do_POST(self):
+        u = urlparse(self.path)
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            raw = self.rfile.read(length) if length else b""
+            body = json.loads(raw.decode("utf-8")) if raw else {}
+            if not isinstance(body, dict):
+                return self._send(400, {"error": "expected a JSON object"})
+            routes = {
+                "/api/collections": self.api_collection_create,
+                "/api/collections/rename": self.api_collection_rename,
+                "/api/collections/delete": self.api_collection_delete,
+                "/api/collection_items": self.api_collection_item,
+            }
+            handler = routes.get(u.path)
+            if handler is None:
+                return self._send(404, {"error": "not found"})
+            result = handler(body)
+            return self._send(400 if "error" in result else 200, result)
+        except json.JSONDecodeError:
+            return self._send(400, {"error": "invalid JSON body"})
         except Exception as e:
             return self._send(500, {"error": str(e)})
 
@@ -1264,6 +1315,7 @@ class Handler(BaseHTTPRequestHandler):
         branch = (q.get("branch", [""])[0] or "").strip()
         dfrom = (q.get("from", [""])[0] or "").strip()
         dto = (q.get("to", [""])[0] or "").strip()
+        collection = (q.get("collection", [""])[0] or "").strip()
         sort = (q.get("sort", ["recent"])[0] or "recent").strip()
         limit = min(int(q.get("limit", ["300"])[0]), 2000)
         where, args = [], []
@@ -1279,7 +1331,10 @@ class Handler(BaseHTTPRequestHandler):
             where.append("substr(ended,1,10)>=?"); args.append(dfrom)
         if dto:
             where.append("substr(ended,1,10)<=?"); args.append(dto)
-        sql = ("SELECT id,tool,sid,project,cwd,started,ended,msg_count,title,model,"
+        if collection:
+            where.append("path IN (SELECT session_path FROM collection_items WHERE collection_id=?)")
+            args.append(int(collection))
+        sql = ("SELECT id,tool,sid,path,project,cwd,started,ended,msg_count,title,model,"
                "git_branch,cost_usd,in_tokens,out_tokens FROM sessions")
         if where:
             sql += " WHERE " + " AND ".join(where)
@@ -1302,6 +1357,85 @@ class Handler(BaseHTTPRequestHandler):
                 " FROM sessions WHERE project!='' GROUP BY project"
                 " ORDER BY (MAX(ended) IS NULL OR MAX(ended)=''), MAX(ended) DESC").fetchall()
         return {"projects": [dict(r) for r in rows]}
+
+    # -- collections (bookmarks) --
+
+    def api_collections(self):
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT c.id, c.name, COUNT(ci.session_path) n FROM collections c"
+                " LEFT JOIN collection_items ci ON ci.collection_id=c.id"
+                " GROUP BY c.id ORDER BY c.sort_order, c.name COLLATE NOCASE").fetchall()
+        return {"collections": [dict(r) for r in rows]}
+
+    def api_session_collections(self, q):
+        path = (q.get("path", [""])[0] or "").strip()
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT collection_id FROM collection_items WHERE session_path=?",
+                (path,)).fetchall()
+        return {"ids": [r["collection_id"] for r in rows]}
+
+    def api_bookmarked_paths(self):
+        """Every session_path that belongs to at least one collection — lets the UI
+        flag already-bookmarked rows in one request instead of N lookups."""
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT DISTINCT session_path FROM collection_items").fetchall()
+        return {"paths": [r["session_path"] for r in rows]}
+
+    def api_collection_create(self, body):
+        name = (body.get("name") or "").strip()
+        if not name:
+            return {"error": "name required"}
+        with self.lock:
+            try:
+                cur = self.conn.execute(
+                    "INSERT INTO collections(name, created) VALUES(?, ?)",
+                    (name, now_iso()))
+                self.conn.commit()
+            except sqlite3.IntegrityError:
+                return {"error": "name already exists"}
+        return {"id": cur.lastrowid, "name": name}
+
+    def api_collection_rename(self, body):
+        cid = int(body.get("id") or 0)
+        name = (body.get("name") or "").strip()
+        if not name:
+            return {"error": "name required"}
+        with self.lock:
+            try:
+                self.conn.execute("UPDATE collections SET name=? WHERE id=?", (name, cid))
+                self.conn.commit()
+            except sqlite3.IntegrityError:
+                return {"error": "name already exists"}
+        return {"ok": True}
+
+    def api_collection_delete(self, body):
+        cid = int(body.get("id") or 0)
+        with self.lock:
+            self.conn.execute("DELETE FROM collection_items WHERE collection_id=?", (cid,))
+            self.conn.execute("DELETE FROM collections WHERE id=?", (cid,))
+            self.conn.commit()
+        return {"ok": True}
+
+    def api_collection_item(self, body):
+        cid = int(body.get("collection_id") or 0)
+        path = (body.get("path") or "").strip()
+        op = (body.get("op") or "").strip()
+        if not (cid and path and op in ("add", "remove")):
+            return {"error": "collection_id, path and op(add|remove) required"}
+        with self.lock:
+            if op == "add":
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO collection_items(collection_id, session_path, added)"
+                    " VALUES(?, ?, ?)", (cid, path, now_iso()))
+            else:
+                self.conn.execute(
+                    "DELETE FROM collection_items WHERE collection_id=? AND session_path=?",
+                    (cid, path))
+            self.conn.commit()
+        return {"ok": True}
 
     def api_session(self, q):
         sid = int(q.get("id", ["0"])[0])
@@ -1338,7 +1472,7 @@ class Handler(BaseHTTPRequestHandler):
         sql = """
         SELECT f.session_id AS sid, bm25(fts) AS rank,
                snippet(fts, 0, '«', '»', ' … ', 12) AS snip,
-               s.tool, s.project, s.cwd, s.title, s.started, s.ended, s.msg_count, s.model
+               s.tool, s.project, s.cwd, s.title, s.started, s.ended, s.msg_count, s.model, s.path
         FROM fts f JOIN sessions s ON s.id = f.session_id
         WHERE fts MATCH ?
         """

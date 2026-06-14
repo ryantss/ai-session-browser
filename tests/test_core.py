@@ -498,5 +498,158 @@ class TestApiSearchRole(unittest.TestCase):
         self.assertEqual(self.h.api_search({"q": [""]})["results"], [])
 
 
+def _seed_session(conn, sid, path, project="proj", ended="2026-01-01T00:00:00Z"):
+    conn.execute(
+        "INSERT INTO sessions(tool,sid,path,project,started,ended,msg_count)"
+        " VALUES('claude',?,?,?,?,?,1)", (sid, path, project, ended, ended))
+    return conn.execute("SELECT id FROM sessions WHERE path=?", (path,)).fetchone()[0]
+
+
+class TestCollections(unittest.TestCase):
+    """Named collections (bookmarks). Membership keys on the stable sessions.path,
+    so it must survive a reindex that reassigns sessions.id."""
+
+    def setUp(self):
+        self.conn = fresh_conn()
+        self.h = make_handler(self.conn)
+
+    # -- create / list --
+
+    def test_create_and_list(self):
+        a = self.h.api_collection_create({"name": "Refund work"})
+        b = self.h.api_collection_create({"name": "Good prompts"})
+        self.assertIn("id", a)
+        cols = self.h.api_collections()["collections"]
+        names = {c["name"]: c["n"] for c in cols}
+        self.assertEqual(names, {"Refund work": 0, "Good prompts": 0})
+        self.assertNotEqual(a["id"], b["id"])
+
+    def test_create_trims_and_rejects_empty(self):
+        ok = self.h.api_collection_create({"name": "  Spaced  "})
+        self.assertEqual(ok["name"], "Spaced")
+        bad = self.h.api_collection_create({"name": "   "})
+        self.assertIn("error", bad)
+        self.assertEqual(len(self.h.api_collections()["collections"]), 1)
+
+    def test_create_duplicate_name_errors(self):
+        self.h.api_collection_create({"name": "Dup"})
+        dup = self.h.api_collection_create({"name": "Dup"})
+        self.assertIn("error", dup)
+        self.assertEqual(len(self.h.api_collections()["collections"]), 1)
+
+    # -- membership + filter --
+
+    def test_add_item_filters_sessions(self):
+        _seed_session(self.conn, "s1", "/p1")
+        _seed_session(self.conn, "s2", "/p2")
+        cid = self.h.api_collection_create({"name": "C"})["id"]
+        self.h.api_collection_item({"collection_id": cid, "path": "/p1", "op": "add"})
+        out = self.h.api_sessions({"collection": [str(cid)]})["sessions"]
+        self.assertEqual([s["sid"] for s in out], ["s1"])
+
+    def test_add_item_idempotent(self):
+        _seed_session(self.conn, "s1", "/p1")
+        cid = self.h.api_collection_create({"name": "C"})["id"]
+        self.h.api_collection_item({"collection_id": cid, "path": "/p1", "op": "add"})
+        self.h.api_collection_item({"collection_id": cid, "path": "/p1", "op": "add"})
+        self.assertEqual(self.h.api_collections()["collections"][0]["n"], 1)
+
+    def test_remove_item(self):
+        _seed_session(self.conn, "s1", "/p1")
+        cid = self.h.api_collection_create({"name": "C"})["id"]
+        self.h.api_collection_item({"collection_id": cid, "path": "/p1", "op": "add"})
+        self.h.api_collection_item({"collection_id": cid, "path": "/p1", "op": "remove"})
+        self.assertEqual(self.h.api_sessions({"collection": [str(cid)]})["sessions"], [])
+
+    def test_session_collections_lists_memberships(self):
+        _seed_session(self.conn, "s1", "/p1")
+        c1 = self.h.api_collection_create({"name": "C1"})["id"]
+        c2 = self.h.api_collection_create({"name": "C2"})["id"]
+        self.h.api_collection_create({"name": "C3"})
+        self.h.api_collection_item({"collection_id": c1, "path": "/p1", "op": "add"})
+        self.h.api_collection_item({"collection_id": c2, "path": "/p1", "op": "add"})
+        ids = set(self.h.api_session_collections({"path": ["/p1"]})["ids"])
+        self.assertEqual(ids, {c1, c2})
+
+    def test_bookmarked_paths_is_distinct_union(self):
+        _seed_session(self.conn, "s1", "/p1")
+        c1 = self.h.api_collection_create({"name": "C1"})["id"]
+        c2 = self.h.api_collection_create({"name": "C2"})["id"]
+        self.h.api_collection_item({"collection_id": c1, "path": "/p1", "op": "add"})
+        self.h.api_collection_item({"collection_id": c2, "path": "/p1", "op": "add"})
+        self.h.api_collection_item({"collection_id": c1, "path": "/p2", "op": "add"})
+        self.assertEqual(set(self.h.api_bookmarked_paths()["paths"]), {"/p1", "/p2"})
+
+    def test_sessions_row_includes_path(self):
+        _seed_session(self.conn, "s1", "/p1")
+        out = self.h.api_sessions({})["sessions"]
+        self.assertEqual(out[0]["path"], "/p1")
+
+    # -- rename / delete --
+
+    def test_rename(self):
+        cid = self.h.api_collection_create({"name": "Old"})["id"]
+        self.h.api_collection_rename({"id": cid, "name": "New"})
+        self.assertEqual(self.h.api_collections()["collections"][0]["name"], "New")
+
+    def test_delete_cascades_items(self):
+        _seed_session(self.conn, "s1", "/p1")
+        cid = self.h.api_collection_create({"name": "C"})["id"]
+        self.h.api_collection_item({"collection_id": cid, "path": "/p1", "op": "add"})
+        self.h.api_collection_delete({"id": cid})
+        self.assertEqual(self.h.api_collections()["collections"], [])
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM collection_items").fetchone()[0], 0)
+
+    # -- edge cases --
+
+    def test_orphan_membership_does_not_break_listing(self):
+        # A membership whose session file no longer exists must not crash listing.
+        cid = self.h.api_collection_create({"name": "C"})["id"]
+        self.h.api_collection_item({"collection_id": cid, "path": "/gone", "op": "add"})
+        self.assertEqual(self.h.api_sessions({"collection": [str(cid)]})["sessions"], [])
+        self.assertEqual(self.h.api_collections()["collections"][0]["n"], 1)
+
+    # -- the headline invariant --
+
+    def test_membership_survives_reindex(self):
+        """Force a full reparse (which delete+reinserts sessions, reassigning ids)
+        and assert the session is still in its collection — proving membership keys
+        on path, not the volatile sessions.id."""
+        with tempfile.TemporaryDirectory() as d:
+            def make_parser(sid):
+                def parse(_p):
+                    meta = {"tool": "claude", "sid": sid, "cwd": "/repo", "project": "repo",
+                            "started": "2026-06-01T00:00:00Z", "ended": "2026-06-01T01:00:00Z",
+                            "model": "claude-opus-4-8", "git_branch": "main"}
+                    return meta, [{"role": "user", "ts": "t", "text": "hi"}], [], []
+                return parse
+
+            f1 = Path(d) / "one.jsonl"; f1.write_text("x")
+            f2 = Path(d) / "two.jsonl"; f2.write_text("x")
+            conn = self.conn
+            h = self.h
+            orig = server.discover
+            try:
+                server.discover = lambda: [("claude", str(f1), make_parser("s1"), None),
+                                           ("claude", str(f2), make_parser("s2"), None)]
+                server.index(conn)
+                id_before = conn.execute(
+                    "SELECT id FROM sessions WHERE path=?", (str(f2),)).fetchone()[0]
+                cid = h.api_collection_create({"name": "Keep"})["id"]
+                h.api_collection_item({"collection_id": cid, "path": str(f2), "op": "add"})
+
+                server.index(conn, force=True)   # reassigns ids
+                id_after = conn.execute(
+                    "SELECT id FROM sessions WHERE path=?", (str(f2),)).fetchone()[0]
+            finally:
+                server.discover = orig
+
+            self.assertNotEqual(id_before, id_after, "test precondition: id must change")
+            out = h.api_sessions({"collection": [str(cid)]})["sessions"]
+            self.assertEqual([s["sid"] for s in out], ["s2"])
+            self.assertEqual(out[0]["id"], id_after)
+
+
 if __name__ == "__main__":
     unittest.main()

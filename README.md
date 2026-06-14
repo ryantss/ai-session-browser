@@ -9,7 +9,9 @@ Zero third-party dependencies: Python 3 stdlib only (`sqlite3` + `http.server`).
 
 Three views:
 - **Browse** — project sidebar, full-text search, transcripts with rendered Markdown + collapsible
-  tool blocks, per-session cost badges, keyboard nav (`j`/`k`/`/`), date filters.
+  tool blocks, per-session cost badges, keyboard nav (`j`/`k`/`/`), date filters. Bookmark sessions
+  into named **collections** (the `+` on any row or in the transcript header) and filter the list to
+  a collection from the sidebar.
 - **Analytics** — token/cost dashboard ($ per day / model / project / tool), cache savings, and a
   day×hour activity heatmap. Built from usage data already in the logs.
 - **Provenance** — "which sessions touched `ingester.py`", "every `git push` I ran", with
@@ -95,10 +97,16 @@ operators pass through: `"exact phrase"`, `term*`, `a OR b`, `NEAR(a b, 5)`.
 
 ## HTTP API
 
-`GET /api/stats` · `GET /api/sessions` (filters: `tool`, `project`, `model`, `branch`, `from`, `to`) ·
-`GET /api/session?id=` (returns transcript + `tool_events` + `usage`) · `GET /api/search?q=` ·
-`GET /api/projects` · `GET /api/analytics` · `GET /api/provenance?q=&kind=file|command` ·
-`GET /api/history?q=` · `GET /api/reindex[?reprice=1]`. See the skill doc for response shapes.
+`GET /api/stats` · `GET /api/sessions` (filters: `tool`, `project`, `model`, `branch`, `from`, `to`,
+`collection`) · `GET /api/session?id=` (returns transcript + `tool_events` + `usage`) ·
+`GET /api/search?q=` · `GET /api/projects` · `GET /api/analytics` ·
+`GET /api/provenance?q=&kind=file|command` · `GET /api/history?q=` · `GET /api/reindex[?reprice=1]`.
+
+Collections (bookmarks): `GET /api/collections` · `GET /api/session-collections?path=` ·
+`GET /api/bookmarked-paths` · `POST /api/collections {name}` · `POST /api/collections/rename {id,name}` ·
+`POST /api/collections/delete {id}` · `POST /api/collection_items {collection_id,path,op:add|remove}`.
+Membership keys on the stable session `path`, so it survives a full `--reindex` (which reassigns the
+integer `sessions.id`). See the skill doc for response shapes.
 
 ## Privacy
 
