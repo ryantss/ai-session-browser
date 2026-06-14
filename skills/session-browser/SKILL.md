@@ -59,7 +59,7 @@ searchable but visually distinct. Pure auth/info/error noise and command scaffol
 ## API (for scripting / debugging)
 
 - `GET /api/stats` — totals and per-tool counts.
-- `GET /api/sessions?tool=&project=&model=&branch=&from=&to=&limit=` — filtered session list (includes `cost_usd`, `git_branch`).
+- `GET /api/sessions?tool=&project=&model=&branch=&from=&to=&collection=&limit=` — filtered session list (includes `cost_usd`, `git_branch`, `path`).
 - `GET /api/session?id=` — a full transcript plus `tool_events` (files/commands) and per-model `usage`.
 - `GET /api/search?q=&tool=&limit=` — full-text search, grouped by session with snippets.
 - `GET /api/projects` — projects with counts/last-activity (powers the sidebar).
@@ -67,6 +67,8 @@ searchable but visually distinct. Pure auth/info/error noise and command scaffol
 - `GET /api/provenance?q=&kind=file|command&tool=` — sessions that touched a path or ran a command, with resume links.
 - `GET /api/history?q=&limit=` — flat reverse-chron feed of Codex prompts (`~/.codex/history.jsonl`).
 - `GET /api/reindex` — incremental re-index; `?reprice=1` recomputes costs from `prices.json` without re-parsing.
+- `GET /api/collections` — named collections (bookmarks) with member counts; `GET /api/session-collections?path=` lists the collections a session is in; `GET /api/bookmarked-paths` returns every bookmarked `session_path`.
+- `POST /api/collections {name}` create · `POST /api/collections/rename {id,name}` · `POST /api/collections/delete {id}` · `POST /api/collection_items {collection_id,path,op:add|remove}`. Membership keys on the stable session `path`, so it survives `--reindex`.
 
 ## Pricing
 
