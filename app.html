@@ -667,6 +667,17 @@ async function loadStats(){
     (s.last_indexed ? '<span class="stat refreshed" title="Last refreshed '+esc(fmtDate(s.last_indexed))+'">&#8635; '+(ago(s.last_indexed)||'just now')+'</span>' : '');
   renderFilters();
 }
+// Sort options are mode-aware: search offers Relevance (and hides Cost, which
+// search results don't carry); the plain list offers Cost (and hides Relevance,
+// meaningless without a query).
+function sortOptionsHTML(){
+  const searching = state.mode==='search';
+  const so=(v,l)=>'<option value="'+v+'"'+(state.sort===v?' selected':'')+'>'+l+'</option>';
+  return (searching ? so('relevance','↓ Relevance') : '')
+       + so('recent','↓ Recent') + so('project','↓ Project')
+       + (searching ? '' : so('cost','↓ Cost')) + so('messages','↓ Messages');
+}
+function refreshSortSelect(){ const fs=$('#f-sort'); if(fs) fs.innerHTML=sortOptionsHTML(); }
 function renderFilters(){
   if(state.atlasMap) return;
   const F=$('#filters');
@@ -684,10 +695,7 @@ function renderFilters(){
     html += '<input type="date" id="f-from" title="from" value="'+state.from+'">'
           + '<input type="date" id="f-to" title="to" value="'+state.to+'">';
   }
-  const so=(v,l)=>'<option value="'+v+'"'+(state.sort===v?' selected':'')+'>'+l+'</option>';
-  html += '<select class="f-sort" id="f-sort" title="Sort sessions">'
-        + so('recent','↓ Recent')+so('project','↓ Project')+so('cost','↓ Cost')+so('messages','↓ Messages')
-        + '</select>';
+  html += '<select class="f-sort" id="f-sort" title="Sort sessions">'+sortOptionsHTML()+'</select>';
   F.innerHTML = html;
   F.querySelectorAll('.chip[data-tool]').forEach(c=> c.onclick=()=>{ state.tool=c.dataset.tool; refreshChips(); reloadList(); });
   F.querySelectorAll('.chip[data-range]').forEach(c=> c.onclick=()=>{ applyRange(c.dataset.range);
@@ -875,7 +883,10 @@ function reloadList(){
   (state.mode==='search' && $('#q').value.trim()) ? runSearch() : loadSessions();
 }
 async function loadSessions(){
-  state.mode='list'; $('#rows').innerHTML='<div class="loading">Loading...</div>';
+  // Leaving search: relevance has no meaning in the plain list, fall back to recent.
+  if(state.mode==='search' && state.sort==='relevance') state.sort='recent';
+  state.mode='list'; refreshSortSelect();
+  $('#rows').innerHTML='<div class="loading">Loading...</div>';
   const r = await api('/api/sessions', listParams());
   renderRows(r.sessions, false);
 }
@@ -1021,8 +1032,12 @@ $('#qscope').querySelectorAll('.chip').forEach(b=> b.onclick=()=>{
   if($('#q').value.trim()) runSearch(); });
 async function runSearch(){
   const q=$('#q').value.trim(); if(!q){ loadSessions(); return; }
-  state.mode='search'; $('#rows').innerHTML='<div class="loading">Searching...</div>';
-  const p=listParams({q}); if(state.searchRole) p.role=state.searchRole;
+  // Auto-select Relevance the moment a search begins (only on entry, so an
+  // explicit Recent/Project/Messages choice survives subsequent keystrokes).
+  if(state.mode!=='search') state.sort='relevance';
+  state.mode='search'; refreshSortSelect();
+  $('#rows').innerHTML='<div class="loading">Searching...</div>';
+  const p=listParams({q, sort: state.sort||'relevance'}); if(state.searchRole) p.role=state.searchRole;
   const r = await api('/api/search', p);
   if(r.error){ $('#qhint').textContent=r.error; $('#rows').innerHTML='<div class="loading">'+esc(r.error)+'</div>'; return; }
   $('#qhint').textContent = r.results.length+' session'+(r.results.length!==1?'s':'');

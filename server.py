@@ -1462,6 +1462,7 @@ class Handler(BaseHTTPRequestHandler):
         raw = (q.get("q", [""])[0] or "").strip()
         tool = (q.get("tool", [""])[0] or "").strip()
         role = (q.get("role", [""])[0] or "").strip()
+        sort = (q.get("sort", ["relevance"])[0] or "relevance").strip()
         limit = min(int(q.get("limit", ["80"])[0]), 300)
         if not raw:
             return {"results": [], "query": raw}
@@ -1496,7 +1497,17 @@ class Handler(BaseHTTPRequestHandler):
                 g = dict(r); g["hits"] = 0; g.pop("rank", None)
                 grouped[sid] = g
             g["hits"] += 1
-        results = list(grouped.values())[:limit]
+        # Messages are fetched in bm25 rank order, so grouped.values() is already
+        # in relevance order (best snippet per session kept). Re-sort the sessions
+        # to honor the `sort` selector; an unknown sort keeps relevance order.
+        results = list(grouped.values())
+        if sort == "recent":
+            results.sort(key=lambda r: (r.get("ended") or "", r.get("started") or ""), reverse=True)
+        elif sort == "messages":
+            results.sort(key=lambda r: (r.get("msg_count") or 0), reverse=True)
+        elif sort == "project":
+            results.sort(key=lambda r: ((r.get("project") or "") == "", (r.get("project") or "").lower()))
+        results = results[:limit]
         return {"query": raw, "results": results}
 
     @staticmethod
