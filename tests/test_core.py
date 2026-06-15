@@ -498,6 +498,57 @@ class TestApiSearchRole(unittest.TestCase):
         self.assertEqual(self.h.api_search({"q": [""]})["results"], [])
 
 
+class TestApiSearchSort(unittest.TestCase):
+    """/api/search must honor the `sort` selector. Regression: search always
+    ordered grouped sessions by bm25 relevance and ignored `sort`, so picking
+    'Recent' still returned relevance order (the misordered "X ago" list)."""
+
+    def setUp(self):
+        self.conn = fresh_conn()
+        # Three sessions whose recency, relevance (term frequency) and message
+        # counts each induce a DIFFERENT order, so every branch is distinguishable.
+        #   recent (ended desc):  [1, 3, 2]
+        #   relevance (most hits): [2, 3, 1]
+        #   messages (count desc): [3, 1, 2]
+        rows = [
+            (1, "2026-01-03T00:00:00Z", 10, "fox"),
+            (2, "2026-01-01T00:00:00Z", 2,  "fox fox fox fox fox"),
+            (3, "2026-01-02T00:00:00Z", 50, "fox fox"),
+        ]
+        for sid, ended, mc, text in rows:
+            self.conn.execute(
+                "INSERT INTO sessions(id,tool,sid,path,project,started,ended,msg_count)"
+                " VALUES(?,?,?,?,?,?,?,?)",
+                (sid, "claude", f"s{sid}", f"/p{sid}", "proj", ended, ended, mc))
+            self.conn.execute("INSERT INTO fts(text,session_id,idx,role) VALUES(?,?,0,'user')",
+                              (text, sid))
+        self.h = make_handler(self.conn)
+
+    def order(self, **q):
+        q.setdefault("q", ["fox"])
+        return [r["sid"] for r in self.h.api_search(q)["results"]]
+
+    def test_default_is_relevance(self):
+        # No sort param → preserve the legacy bm25 ranking (best match first).
+        self.assertEqual(self.order(), [2, 3, 1])
+
+    def test_explicit_relevance_matches_default(self):
+        self.assertEqual(self.order(sort=["relevance"]), [2, 3, 1])
+
+    def test_recent_orders_by_ended_desc(self):
+        self.assertEqual(self.order(sort=["recent"]), [1, 3, 2])
+
+    def test_messages_orders_by_count_desc(self):
+        self.assertEqual(self.order(sort=["messages"]), [3, 1, 2])
+
+    def test_unknown_sort_falls_back_to_relevance(self):
+        self.assertEqual(self.order(sort=["garbage"]), self.order(sort=["relevance"]))
+
+    def test_role_filter_still_composes_with_sort(self):
+        # The role filter must keep working under an explicit sort.
+        self.assertEqual(self.order(sort=["recent"], role=["user"]), [1, 3, 2])
+
+
 def _seed_session(conn, sid, path, project="proj", ended="2026-01-01T00:00:00Z"):
     conn.execute(
         "INSERT INTO sessions(tool,sid,path,project,started,ended,msg_count)"
