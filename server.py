@@ -1618,20 +1618,21 @@ class Handler(BaseHTTPRequestHandler):
                 g = {"session_id": r["sid"], "tool": r["tool"], "sessionsid": r["sessionsid"],
                      "project": r["project"], "cwd": r["cwd"], "title": r["title"],
                      "started": r["started"], "ended": r["ended"], "count": 0, "sample": r["hit"]}
-                g["resume"] = self._resume_cmd(r["tool"], r["sessionsid"])
+                g["resume"] = self._resume_cmd(r["tool"], r["sessionsid"], r.get("cwd", ""))
                 grouped[r["sid"]] = g
             g["count"] += 1
         results = sorted(grouped.values(), key=lambda x: x["count"], reverse=True)[:limit]
         return {"query": raw, "kind": kind, "results": results}
 
     @staticmethod
-    def _resume_cmd(tool, sessionsid):
+    def _resume_cmd(tool, sessionsid, cwd=""):
         if not sessionsid:
             return ""
+        prefix = f"cd {cwd} && " if cwd else ""
         if tool == "claude":
-            return f"claude --resume {sessionsid}"
+            return f"{prefix}claude --resume {sessionsid}"
         if tool == "codex":
-            return f"codex resume {sessionsid}"
+            return f"{prefix}codex resume {sessionsid}"
         return ""
 
     def api_history(self, q):

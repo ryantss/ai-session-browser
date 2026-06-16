@@ -959,7 +959,8 @@ async function openSession(id){
   if(s.error){ det.innerHTML='<div class="empty"><div class="big">Not found</div></div>'; return; }
   const files=(s.tool_events||[]).filter(e=>e.kind==='file').length;
   const cmds=(s.tool_events||[]).filter(e=>e.kind==='command').length;
-  const resumeCmd = s.tool==='claude' ? 'claude --resume '+s.sid : s.tool==='codex' ? 'codex resume '+s.sid : s.sid;
+  const cdPrefix = s.cwd ? 'cd '+s.cwd+' && ' : '';
+  const resumeCmd = s.tool==='claude' ? cdPrefix+'claude --resume '+s.sid : s.tool==='codex' ? cdPrefix+'codex resume '+s.sid : s.sid;
   const head = '<div class="dhead"><h1>'+(esc(s.title)||'(untitled)')+'</h1>'
     +'<div class="dmeta"><span class="tag '+s.tool+'">'+s.tool+'</span><span>'+esc(s.project||'')+'</span>'
     +(s.cwd?'<code>'+esc(s.cwd)+'</code>':'')
