@@ -56,7 +56,7 @@
   .refreshbtn:disabled{opacity:.6;cursor:default;}
 
   .view{overflow:hidden;}
-  .browse{display:grid;grid-template-columns:var(--w-side,210px) 380px 1fr;overflow:hidden;height:100%;position:relative;transition:grid-template-columns .2s ease;}
+  .browse{display:grid;grid-template-columns:var(--w-side,210px) var(--w-list,380px) 1fr;overflow:hidden;height:100%;position:relative;transition:grid-template-columns .2s ease;}
   .browse.side-hidden{--w-side:0px;}
   .browse.side-hidden .sidebar{overflow:hidden;border-right:0;}
   /* collapse handles */
@@ -70,6 +70,14 @@
   /* layouts that hide the sidebar entirely never need the collapse affordances */
   [data-layout="logbook"] .side-reopen,[data-layout="atlas"] .side-reopen{display:none!important;}
   #detail.session.outline-hidden .outline{display:none;}
+  .browse.list-hidden{--w-list:0px;}
+  .browse.list-hidden .list{overflow:hidden;border-right:0;}
+  .list-reopen{position:absolute;left:var(--w-side,210px);top:12px;z-index:6;display:none;border:1px solid var(--line);border-left:0;
+    background:var(--card);color:var(--muted);cursor:pointer;padding:9px 5px;border-radius:0 8px 8px 0;box-shadow:var(--shadow);font-size:13px;}
+  .browse.list-hidden .list-reopen{display:block;}
+  .browse.side-hidden.list-hidden .list-reopen{left:0;top:48px;}
+  .list-reopen:hover{color:var(--accent);}
+  [data-layout="logbook"] .list-reopen,[data-layout="atlas"] .list-reopen{display:none!important;}
   /* shortcuts help (reuses .cmdk backdrop) */
   .sc-box{width:520px;padding:18px 20px 6px;}
   .sc-title{font-size:14px;font-weight:600;margin-bottom:12px;}
@@ -403,6 +411,7 @@
 
   <div class="view browse" id="view-browse">
     <button class="side-reopen" id="side-reopen" title="Show projects ( [ )">&#10095;</button>
+    <button class="list-reopen" id="list-reopen" title="Show sessions ( ] )">&#10095;</button>
     <div class="sidebar" id="sidebar"></div>
     <div class="list">
       <div class="filters" id="filters"></div>
@@ -467,6 +476,7 @@
       <div class="sc-row"><span class="lbl">Re-index / refresh</span><kbd>r</kbd></div>
       <div class="sc-sec">Panels</div>
       <div class="sc-row"><span class="lbl">Toggle projects</span><kbd>[</kbd></div>
+      <div class="sc-row"><span class="lbl">Toggle session list</span><kbd>]</kbd></div>
       <div class="sc-row"><span class="lbl">Toggle turn outline</span><kbd>o</kbd></div>
       <div class="sc-row"><span class="lbl">This help</span><kbd>?</kbd></div>
       <div class="sc-row"><span class="lbl">Close overlay</span><kbd>esc</kbd></div>
@@ -493,7 +503,8 @@ const ago = iso => { if(!iso) return ''; const d=new Date(iso); if(isNaN(d)) ret
 let state = {view:'browse', tool:'', project:'', collection:'', collectionName:'', from:'', to:'', sort:'recent', searchRole:'', projFilter:'', projSort:'activity', mode:'list', selected:null,
   density:(localStorage.getItem('sb_density')||'all'),
   sidebarHidden:(localStorage.getItem('sb_sidebar_hidden')==='1'),
-  outlineHidden:(localStorage.getItem('sb_outline_hidden')==='1')};
+  outlineHidden:(localStorage.getItem('sb_outline_hidden')==='1'),
+  listHidden:(localStorage.getItem('sb_list_hidden')==='1')};
 
 ['theme','accent','font'].forEach(k=>{ const v=localStorage.getItem('sb_'+k); if(v) document.documentElement.dataset[k]=v; });
 function syncTweaks(){ document.querySelectorAll('[data-set]').forEach(b=>
@@ -512,10 +523,15 @@ function toggleSidebar(){ state.sidebarHidden=!state.sidebarHidden;
 function applyOutline(){ const d=$('#detail'); if(d) d.classList.toggle('outline-hidden', state.outlineHidden); }
 function toggleOutline(){ state.outlineHidden=!state.outlineHidden;
   localStorage.setItem('sb_outline_hidden', state.outlineHidden?'1':'0'); applyOutline(); }
+function applyList(){ const b=$('#view-browse'); if(b) b.classList.toggle('list-hidden', state.listHidden); }
+function toggleList(){ state.listHidden=!state.listHidden;
+  localStorage.setItem('sb_list_hidden', state.listHidden?'1':'0'); applyList(); }
 function toggleShortcuts(){ $('#shortcuts').classList.toggle('open'); }
 $('#side-reopen').onclick=()=>toggleSidebar();
+$('#list-reopen').onclick=()=>toggleList();
 $('#shortcuts').addEventListener('mousedown', e=>{ if(e.target.id==='shortcuts') toggleShortcuts(); });
 applySidebar();
+applyList();
 
 // ---- layout switcher (chronicle / logbook / atlas / pixel) ----
 const LAYOUTS=[['chronicle','Chronicle'],['logbook','Logbook'],['atlas','Atlas'],['pixel','Pixel']];
@@ -696,7 +712,9 @@ function renderFilters(){
           + '<input type="date" id="f-to" title="to" value="'+state.to+'">';
   }
   html += '<select class="f-sort" id="f-sort" title="Sort sessions">'+sortOptionsHTML()+'</select>';
+  html += '<button class="col-toggle" id="list-collapse" title="Hide session list ( ] )">&#10094;</button>';
   F.innerHTML = html;
+  const lc=$('#list-collapse'); if(lc) lc.onclick=()=>toggleList();
   F.querySelectorAll('.chip[data-tool]').forEach(c=> c.onclick=()=>{ state.tool=c.dataset.tool; refreshChips(); reloadList(); });
   F.querySelectorAll('.chip[data-range]').forEach(c=> c.onclick=()=>{ applyRange(c.dataset.range);
     F.querySelectorAll('[data-range]').forEach(x=>x.setAttribute('aria-pressed', x.dataset.range===state.range)); reloadList(); });
@@ -1178,6 +1196,7 @@ document.addEventListener('keydown', e=>{
   if(e.key==='p'){ e.preventDefault(); switchView('provenance'); return; }
   if(e.key==='r'){ e.preventDefault(); $('#refreshbtn').click(); return; }
   if(e.key==='['){ e.preventDefault(); toggleSidebar(); return; }
+  if(e.key===']'){ e.preventDefault(); toggleList(); return; }
   if(e.key==='o'){ e.preventDefault(); toggleOutline(); return; }
   if(state.view!=='browse') return;
   const rows=Array.from(document.querySelectorAll('#rows .row')); if(!rows.length) return;
