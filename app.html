@@ -58,7 +58,7 @@
   .view{overflow:hidden;}
   .browse{display:grid;grid-template-columns:var(--w-side,210px) var(--w-list,380px) 1fr;overflow:hidden;height:100%;position:relative;transition:grid-template-columns .2s ease;}
   .browse.side-hidden{--w-side:0px;}
-  .browse.side-hidden .sidebar{overflow:hidden;border-right:0;min-width:0;}
+  .browse.side-hidden .sidebar{overflow:clip;border-right:0;min-width:0;}
   /* collapse handles */
   .col-toggle{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;padding:3px 6px;border-radius:6px;}
   .col-toggle:hover{color:var(--accent);background:var(--accent-soft);}
@@ -71,7 +71,7 @@
   [data-layout="logbook"] .side-reopen,[data-layout="atlas"] .side-reopen{display:none!important;}
   #detail.session.outline-hidden .outline{display:none;}
   .browse.list-hidden{--w-list:0px;}
-  .browse.list-hidden .list{overflow:hidden;border-right:0;min-width:0;}
+  .browse.list-hidden .list{overflow:clip;border-right:0;min-width:0;}
   .browse.list-hidden #detail.session .outline{display:none;}
   .list-reopen{position:absolute;left:var(--w-side,210px);top:12px;z-index:6;display:none;border:1px solid var(--line);border-left:0;
     background:var(--card);color:var(--muted);cursor:pointer;padding:9px 5px;border-radius:0 8px 8px 0;box-shadow:var(--shadow);font-size:13px;}
