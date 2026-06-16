@@ -391,7 +391,7 @@
       </select>
     </div>
     <div class="searchbox" id="searchwrap">
-      <input id="q" type="search" placeholder="Search all sessions...  (try: bigquery refund)" autocomplete="off">
+      <input id="q" type="search" placeholder="Search all sessions…" autocomplete="off">
       <div class="qscope" id="qscope" title="Limit search to message type">
         <button class="chip" data-role="" aria-pressed="true">All</button>
         <button class="chip" data-role="user" aria-pressed="false">Your prompts</button>
@@ -1024,15 +1024,45 @@ async function openSession(id){
 }
 
 // ---- search ----
+const SEARCH_HINTS = [
+  'try: bigquery refund',
+  'try: "exact phrase"',
+  'try: auth OR login',
+  'try: migration NOT rollback',
+  'try: refu*',
+  'try: NEAR(bug fix, 5)',
+  'try: (auth OR jwt) AND token',
+];
+let _hintIdx = Math.floor(Math.random() * SEARCH_HINTS.length);
+let _hintTimer = null;
+const _qInput = $('#q');
+function _rotatePlaceholder() {
+  if (_qInput.value.trim()) return;
+  _qInput.placeholder = SEARCH_HINTS[_hintIdx % SEARCH_HINTS.length];
+  _hintIdx++;
+}
+function _startHintCycle() {
+  clearInterval(_hintTimer);
+  _rotatePlaceholder();
+  _hintTimer = setInterval(_rotatePlaceholder, 4000);
+}
+function _stopHintCycle() {
+  clearInterval(_hintTimer);
+  _hintTimer = null;
+  _qInput.placeholder = 'Search all sessions…';
+}
+
 let searchTimer=null;
-$('#q').addEventListener('input', e=>{ clearTimeout(searchTimer); const v=e.target.value.trim();
+_qInput.addEventListener('input', e=>{ clearTimeout(searchTimer); const v=e.target.value.trim();
+  if (v) { _stopHintCycle(); $('#qhint').textContent=''; }
+  else   { _startHintCycle(); $('#qhint').textContent=''; }
   searchTimer=setTimeout(()=> v?runSearch():loadSessions(), 220); });
 $('#qscope').querySelectorAll('.chip').forEach(b=> b.onclick=()=>{
   state.searchRole=b.dataset.role;
   $('#qscope').querySelectorAll('.chip').forEach(x=>x.setAttribute('aria-pressed', x.dataset.role===state.searchRole));
-  if($('#q').value.trim()) runSearch(); });
+  if(_qInput.value.trim()) runSearch(); });
 async function runSearch(){
-  const q=$('#q').value.trim(); if(!q){ loadSessions(); return; }
+  const q=_qInput.value.trim(); if(!q){ loadSessions(); return; }
   // Auto-select Relevance the moment a search begins (only on entry, so an
   // explicit Recent/Project/Messages choice survives subsequent keystrokes).
   if(state.mode!=='search') state.sort='relevance';
@@ -1044,6 +1074,8 @@ async function runSearch(){
   $('#qhint').textContent = r.results.length+' session'+(r.results.length!==1?'s':'');
   renderRows(r.results, true);
 }
+// start hint cycle on page load
+_startHintCycle();
 
 // ---- command palette (Cmd+K / "/") ----
 const cmdk = {open:false, sel:0, items:[], timer:null};
