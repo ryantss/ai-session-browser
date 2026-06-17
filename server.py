@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -51,6 +52,64 @@ def _find_app_html() -> Path:
 
 
 APP_HTML = _find_app_html()
+
+_DEFAULT_REPO_URL = "https://github.com/ryan-wego/ai-session-browser"
+
+
+def _read_pyproject():
+    """Best-effort (version, homepage) from pyproject.toml next to this module.
+    Returns (None, None) when the file is absent (e.g. a pip install)."""
+    pp = APP_DIR / "pyproject.toml"
+    try:
+        text = pp.read_text(encoding="utf-8")
+    except OSError:
+        return None, None
+    ver = re.search(r'(?m)^\s*version\s*=\s*["\']([^"\']+)["\']', text)
+    home = re.search(r'(?m)^\s*Homepage\s*=\s*["\']([^"\']+)["\']', text)
+    return (ver.group(1) if ver else None), (home.group(1) if home else None)
+
+
+def _detect_version(pyproject_version):
+    try:
+        from importlib.metadata import PackageNotFoundError, version as _v
+        try:
+            return _v("ai-session-browser")
+        except PackageNotFoundError:
+            pass
+    except Exception:
+        pass
+    return pyproject_version or "0.2.0"
+
+
+def _git_sha():
+    """Full HEAD SHA of the checkout this module lives in, or None if git is
+    unavailable / this is not a git tree."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=APP_DIR,
+            capture_output=True, text=True, timeout=3, check=True)
+        sha = out.stdout.strip()
+        return sha or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _build_info():
+    pyproject_version, homepage = _read_pyproject()
+    version = _detect_version(pyproject_version)
+    repo_url = (homepage or _DEFAULT_REPO_URL).rstrip("/")
+    sha_full = _git_sha()
+    sha = sha_full[:7] if sha_full else None
+    return {
+        "version": version,
+        "sha": sha,
+        "sha_full": sha_full,
+        "repo_url": repo_url,
+        "commit_url": f"{repo_url}/commit/{sha_full}" if sha_full else None,
+    }
+
+
+BUILD = _build_info()  # computed once at startup
 DB_PATH = Path(os.environ.get("SESSION_BROWSER_DB", HOME / ".cache" / "ai-session-browser" / "index.db"))
 
 # Cap per-message stored text so a single giant tool dump can't bloat the DB.
@@ -1304,7 +1363,7 @@ class Handler(BaseHTTPRequestHandler):
                 "SELECT tool, COUNT(*) n, SUM(msg_count) msgs, MIN(started) mn, MAX(ended) mx"
                 " FROM sessions GROUP BY tool").fetchall()
         total = sum(r["n"] for r in rows)
-        return {"total": total, "last_indexed": LAST_INDEXED,
+        return {"total": total, "last_indexed": LAST_INDEXED, "build": BUILD,
                 "tools": [{"tool": r["tool"], "sessions": r["n"], "messages": r["msgs"] or 0,
                            "earliest": r["mn"], "latest": r["mx"]} for r in rows]}
 
