@@ -1,0 +1,79 @@
+name: Regression
+description: Report behavior that used to work but is now broken.
+title: "[Regression]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this when something previously fixed or working appears to have broken again.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What regressed?
+    validations:
+      required: true
+
+  - type: textarea
+    id: previously_working_behavior
+    attributes:
+      label: Previously working behavior
+      description: Describe the known-good behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_behavior
+    attributes:
+      label: Current behavior
+      description: Describe the broken behavior now.
+    validations:
+      required: true
+
+  - type: textarea
+    id: known_good_reference
+    attributes:
+      label: Known-good reference
+      description: Include commit, PR, release, screenshot, or date when this worked.
+      placeholder: |
+        Commit/PR/release/date:
+        Link:
+    validations:
+      required: true
+
+  - type: textarea
+    id: recommended_investigation
+    attributes:
+      label: Recommended investigation
+      description: Check git history to identify when and why the previous fix changed.
+      placeholder: |
+        Relevant files:
+        -
+
+        Suggested git commands:
+        - git log -- <path>
+        - git blame <path>
+        - git show <commit>
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who or what is affected?
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: Define what must be true before closing this regression.
+      value: |
+        - [ ] Root cause identified
+        - [ ] Behavior restored or intentionally changed with explanation
+        - [ ] Regression test added or updated
+    validations:
+      required: true

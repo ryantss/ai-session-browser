@@ -1,0 +1,56 @@
+name: Engineering Task
+description: Track internal engineering work such as refactors, cleanup, migrations, or tooling.
+title: "[Task]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for technical work where the primary audience is engineering.
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What needs to be done?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why is this needed now?
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation_notes
+    attributes:
+      label: Implementation notes
+      description: Known files, systems, constraints, or technical direction.
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: Define the conditions that must be true for this task to be complete.
+      placeholder: |
+        - [ ]
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation
+      description: How should this be tested, verified, or monitored?
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollout_safety
+    attributes:
+      label: Rollout and safety
+      description: Include deploy, migration, rollback, feature flag, or monitoring notes.
