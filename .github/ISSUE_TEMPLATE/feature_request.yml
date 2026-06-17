@@ -1,0 +1,63 @@
+name: Feature Request
+description: Propose a new capability or product/platform improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for user-facing features, platform improvements, or meaningful workflow enhancements.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user, business, or engineering problem are we solving?
+      placeholder: Describe the problem before proposing the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed solution
+      description: What should be built or changed?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches were considered, and why are they less suitable?
+
+  - type: textarea
+    id: success_criteria
+    attributes:
+      label: Success criteria
+      description: How will we know this worked?
+      placeholder: |
+        - [ ]
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Clarify what is in and out of scope.
+      placeholder: |
+        In scope:
+        -
+
+        Out of scope:
+        -
+
+  - type: textarea
+    id: dependencies_risks
+    attributes:
+      label: Dependencies and risks
+      description: List related systems, teams, vendors, deadlines, or decisions.

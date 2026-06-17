@@ -1,0 +1,78 @@
+name: Bug Report
+description: Report broken or unexpected behavior.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for broken behavior, unexpected output, or production/user-facing defects.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken?
+      placeholder: Describe the issue in one or two sentences.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual_behavior
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps_to_reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Provide the shortest reliable reproduction path.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who or what is affected? Include severity, frequency, and user/business impact if known.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Add service, app, platform, version, commit, browser, or device details where relevant.
+      placeholder: |
+        - App/service:
+        - Platform:
+        - Version/commit:
+        - Browser/device:
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Add logs, screenshots, traces, recordings, dashboards, or links.
+
+  - type: textarea
+    id: regression_check
+    attributes:
+      label: Regression check
+      description: Was this working before? Include known-good version, PR, commit, or date if known.
