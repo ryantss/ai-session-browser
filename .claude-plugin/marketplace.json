@@ -1,8 +1,7 @@
 {
   "name": "ai-session-browser",
   "owner": {
-    "name": "Ryan Tan",
-    "email": "ryan.tan@wego.com"
+    "name": "Ryan Tan"
   },
   "metadata": {
     "description": "Local web UI to browse, search, cost-analyze, and trace AI coding session history.",

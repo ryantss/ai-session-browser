@@ -53,7 +53,7 @@ def _find_app_html() -> Path:
 
 APP_HTML = _find_app_html()
 
-_DEFAULT_REPO_URL = "https://github.com/ryan-wego/ai-session-browser"
+_DEFAULT_REPO_URL = "https://github.com/ryantss/ai-session-browser"
 
 
 def _read_pyproject():

@@ -3,8 +3,7 @@
   "version": "0.2.0",
   "description": "Local web UI to browse, full-text search, cost-analyze, and trace file/command provenance across your Claude Code, Codex CLI, and Gemini CLI session history.",
   "author": {
-    "name": "Ryan Tan",
-    "email": "ryan.tan@wego.com"
+    "name": "Ryan Tan"
   },
   "license": "MIT",
   "keywords": ["sessions", "history", "search", "claude", "codex", "gemini", "local", "fts5", "analytics", "cost", "tokens", "provenance"]

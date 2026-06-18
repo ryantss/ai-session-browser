@@ -9,7 +9,7 @@ Zero third-party dependencies: Python 3 stdlib only (`sqlite3` + `http.server`).
 ## Quick start
 
 ```bash
-git clone https://github.com/ryan-wego/ai-session-browser
+git clone https://github.com/ryantss/ai-session-browser
 cd ai-session-browser
 python3 server.py
 ```

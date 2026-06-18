@@ -4,7 +4,7 @@ version = "0.2.0"
 description = "Local web UI to browse, search, cost-analyze, and trace your Claude Code / Codex CLI / Gemini CLI session history."
 readme = "README.md"
 license = { text = "MIT" }
-authors = [{ name = "Ryan Tan", email = "ryan.tan@wego.com" }]
+authors = [{ name = "Ryan Tan" }]
 requires-python = ">=3.9"
 dependencies = []  # stdlib only (sqlite3 + http.server)
 keywords = ["claude", "codex", "gemini", "sessions", "history", "search", "analytics", "cost", "provenance"]
@@ -13,7 +13,7 @@ keywords = ["claude", "codex", "gemini", "sessions", "history", "search", "analy
 ai-session-browser = "server:main"
 
 [project.urls]
-Homepage = "https://github.com/ryan-wego/ai-session-browser"
+Homepage = "https://github.com/ryantss/ai-session-browser"
 
 # Single-module project: server.py at the repo root, app.html served alongside it.
 [tool.setuptools]
