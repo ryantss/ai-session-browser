@@ -525,8 +525,11 @@ const $ = s => document.querySelector(s);
 const api = (p,q={}) => fetch(p + '?' + new URLSearchParams(q)).then(r=>r.json());
 const apiPost = (p,body) => fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},
   body:JSON.stringify(body||{})}).then(r=>r.json());
-const esc = s => (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-const escAttr = s => esc(s).replace(/"/g,'&quot;');
+// Escapes for HTML text AND quoted attribute values (quotes included) so file
+// paths / extensions from session logs can't break out of an attribute. Browsers
+// entity-decode attribute values on read, so dataset/clipboard values stay intact.
+const esc = s => (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const escAttr = esc;
 // Open/copy affordances for a file path. Cursor & VS Code have browser-launchable
 // file URL schemes; Zed has none yet (zed-industries/zed#8482) so we copy `zed
 // "<path>"`; cmux has no file-open scheme either, so "Copy path" covers any pane.
