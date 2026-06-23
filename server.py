@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import os
 import re
 import sqlite3
@@ -225,6 +226,41 @@ def _norm_path(raw: str, base: str = "") -> str:
         return str(p)
     except Exception:
         return raw
+
+
+_INLINE_BINARY_EXT = {"png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "pdf"}
+
+# Served artifacts are untrusted (LLM-generated, may have processed web content).
+# An opaque-origin sandbox lets them render and run their own scripts while denying
+# access to this dashboard's first-party origin — so a malicious <script> cannot
+# read /api/* and exfiltrate session data. NO allow-same-origin (it would re-grant
+# the real origin and defeat the isolation). nosniff pins the declared type.
+_FILE_SECURITY_HEADERS = {
+    "Content-Security-Policy": "sandbox allow-scripts",
+    "X-Content-Type-Options": "nosniff",
+}
+
+
+def _serve_ctype(path: str) -> str:
+    """Content-type for serving a generated artifact inline. HTML renders; images
+    and PDFs use their real type; everything else (md, txt, code, json, csv) is
+    served as UTF-8 text/plain so it displays in the browser rather than downloads."""
+    _, ext = _path_name_ext(path)
+    if ext in ("html", "htm"):
+        return "text/html"   # _send appends charset for html
+    if ext in _INLINE_BINARY_EXT:
+        return mimetypes.guess_type(path)[0] or "application/octet-stream"
+    return "text/plain; charset=utf-8"
+
+
+def _path_name_ext(path: str):
+    """(basename, lowercased extension-without-dot) for a file path.
+    '/a/page.html' -> ('page.html', 'html'); '/a/Makefile' -> ('Makefile', '')."""
+    if not path:
+        return "", ""
+    p = Path(path)
+    suf = p.suffix
+    return p.name, (suf[1:].lower() if suf else "")
 
 
 def _te_file(idx, ts, name, raw_path, base=""):
@@ -1286,7 +1322,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):  # silence default access logging
         pass
 
-    def _send(self, code, body, ctype="application/json"):
+    def _send(self, code, body, ctype="application/json", extra_headers=None):
         if isinstance(body, (dict, list)):
             body = json.dumps(body, ensure_ascii=False).encode("utf-8")
         elif isinstance(body, str):
@@ -1294,6 +1330,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype + ("; charset=utf-8" if "json" in ctype or "html" in ctype else ""))
         self.send_header("Content-Length", str(len(body)))
+        for k, v in (extra_headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -1315,6 +1353,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.api_analytics(q))
             if u.path == "/api/provenance":
                 return self._send(200, self.api_provenance(q))
+            if u.path == "/api/files":
+                return self._send(200, self.api_files(q))
+            if u.path == "/file":
+                code, body, ctype, headers = self.file_payload((q.get("path", [""])[0] or "").strip())
+                return self._send(code, body, ctype, headers)
             if u.path == "/api/history":
                 return self._send(200, self.api_history(q))
             if u.path == "/api/projects":
@@ -1693,6 +1736,106 @@ class Handler(BaseHTTPRequestHandler):
         if tool == "codex":
             return f"{prefix}codex resume {sessionsid}"
         return ""
+
+    def api_files(self, q):
+        """Generated Files view. Without ``path``: a list of distinct files that
+        sessions wrote/modified (pure Reads excluded), grouped by path, each linked
+        to its most-recent originating session, with ext/tool/substring filters and
+        a type facet. With ``path``: every session that touched that file, recent
+        first (full provenance history for one artifact)."""
+        path = (q.get("path", [""])[0] or "").strip()
+        if path:
+            return self._api_file_sessions(path)
+        tool = (q.get("tool", [""])[0] or "").strip()
+        ext = (q.get("ext", [""])[0] or "").strip().lstrip(".").lower()
+        raw = (q.get("q", [""])[0] or "").strip()
+        sort = (q.get("sort", ["recent"])[0] or "recent").strip()
+        limit = min(int(q.get("limit", ["500"])[0]), 2000)
+
+        # Base predicate: file events that are writes/edits (not reads). Read tools
+        # across every parser are named 'Read'/'read'/'read_file' — exclude 'read*'.
+        base_where = ["te.kind='file'", "te.path!=''", "lower(te.name) NOT LIKE 'read%'"]
+        base_args = []
+        if tool:
+            base_where.append("s.tool=?"); base_args.append(tool)
+        if raw:
+            base_where.append("lower(te.path) LIKE ?"); base_args.append(f"%{raw.lower()}%")
+        main_where = list(base_where)
+        main_args = list(base_args)
+        if ext:
+            main_where.append("lower(te.path) LIKE ?"); main_args.append(f"%.{ext}")
+
+        order_by = {
+            "recent":   "last_ts DESC, path COLLATE NOCASE",
+            "name":     "path COLLATE NOCASE ASC",
+            "sessions": "session_count DESC, last_ts DESC",
+            "ops":      "ops DESC, last_ts DESC",
+        }.get(sort, "last_ts DESC, path COLLATE NOCASE")
+        # Bare columns (s.*, last_session_id) come from the MAX(te.ts) input row —
+        # SQLite's documented min/max bare-column rule — i.e. the most-recent toucher.
+        sql = (
+            "SELECT te.path AS path, MAX(te.ts) AS last_ts,"
+            " COUNT(DISTINCT te.session_id) AS session_count, COUNT(*) AS ops,"
+            " s.id AS last_session_id, s.tool AS tool, s.project AS project,"
+            " s.title AS title, s.sid AS sessionsid, s.cwd AS cwd"
+            " FROM tool_events te JOIN sessions s ON s.id=te.session_id"
+            f" WHERE {' AND '.join(main_where)}"
+            f" GROUP BY te.path ORDER BY {order_by} LIMIT ?")
+        with self.lock:
+            rows = self.conn.execute(sql, main_args + [limit]).fetchall()
+            # Type facet over the base set (ignores the active ext filter so the UI
+            # dropdown stays stable), counting distinct files per extension.
+            type_paths = self.conn.execute(
+                "SELECT DISTINCT te.path FROM tool_events te JOIN sessions s ON s.id=te.session_id"
+                f" WHERE {' AND '.join(base_where)}", base_args).fetchall()
+        files = []
+        for r in rows:
+            d = dict(r)
+            d["name"], d["ext"] = _path_name_ext(d["path"])
+            files.append(d)
+        type_counts = {}
+        for r in type_paths:
+            _, e = _path_name_ext(r["path"])
+            type_counts[e] = type_counts.get(e, 0) + 1
+        types = sorted(({"ext": e, "n": n} for e, n in type_counts.items()),
+                       key=lambda t: (-t["n"], t["ext"]))
+        return {"files": files, "types": types}
+
+    def _api_file_sessions(self, path):
+        sql = (
+            "SELECT s.id AS session_id, s.tool, s.project, s.title, s.sid AS sessionsid,"
+            " s.cwd, s.started, s.ended, COUNT(*) AS ops, MAX(te.ts) AS last_ts"
+            " FROM tool_events te JOIN sessions s ON s.id=te.session_id"
+            " WHERE te.kind='file' AND te.path=? AND lower(te.name) NOT LIKE 'read%'"
+            " GROUP BY s.id ORDER BY last_ts DESC, s.ended DESC")
+        with self.lock:
+            rows = self.conn.execute(sql, (path,)).fetchall()
+        sessions = []
+        for r in rows:
+            d = dict(r)
+            d["resume"] = self._resume_cmd(d["tool"], d["sessionsid"], d.get("cwd", ""))
+            sessions.append(d)
+        name, ext = _path_name_ext(path)
+        return {"path": path, "name": name, "ext": ext, "sessions": sessions}
+
+    def file_payload(self, path):
+        """Serve a generated artifact for inline viewing. Returns (code, body, ctype,
+        headers): raw bytes on success, an error dict otherwise. Guarded so only files
+        the index already references can be read — never an arbitrary local-file proxy.
+        Successful responses carry a sandbox CSP so untrusted artifacts are isolated
+        from this dashboard's origin (see _FILE_SECURITY_HEADERS)."""
+        if not path:
+            return 404, {"error": "path required"}, "application/json", {}
+        with self.lock:
+            known = self.conn.execute(
+                "SELECT 1 FROM tool_events WHERE path=? AND kind='file' LIMIT 1", (path,)).fetchone()
+        if not known:
+            return 404, {"error": "not an indexed generated file"}, "application/json", {}
+        try:
+            body = Path(path).read_bytes()
+        except OSError:
+            return 404, {"error": "file not found on disk"}, "application/json", {}
+        return 200, body, _serve_ctype(path), dict(_FILE_SECURITY_HEADERS)
 
     def api_history(self, q):
         raw = (q.get("q", [""])[0] or "").strip().lower()

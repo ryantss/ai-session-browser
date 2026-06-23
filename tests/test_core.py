@@ -702,5 +702,189 @@ class TestCollections(unittest.TestCase):
             self.assertEqual(out[0]["id"], id_after)
 
 
+class TestApiFiles(unittest.TestCase):
+    """/api/files — the Generated Files view (server.api_files).
+
+    Lists files written/modified by sessions (excludes pure reads), grouped by
+    path, each linked to the session(s) that touched it, with search + filters.
+    A `path` param flips the endpoint to a per-file detail listing every session
+    that touched that file.
+    """
+
+    def setUp(self):
+        self.conn = fresh_conn()
+        # Two sessions of different recency and tool.
+        self._sess(1, "s1", "repo-a", tool="claude", ended="2026-01-01T00:00:00Z")
+        self._sess(2, "s2", "repo-b", tool="codex",  ended="2026-01-02T00:00:00Z")
+        # report.md is written by s1 (twice) and patched later by s2;
+        # notes.txt is only Read (must be excluded); page.html written by s2.
+        self._ev(1, "Write",       "/repo-a/report.md", "2026-01-01T00:10:00Z")
+        self._ev(1, "Edit",        "/repo-a/report.md", "2026-01-01T00:20:00Z")
+        self._ev(1, "Read",        "/repo-a/notes.txt", "2026-01-01T00:30:00Z")
+        self._ev(2, "apply_patch", "/repo-a/report.md", "2026-01-02T09:00:00Z")
+        self._ev(2, "Write",       "/repo-b/page.html", "2026-01-02T10:00:00Z")
+        self.h = make_handler(self.conn)
+
+    def _sess(self, sid, ssid, project, tool="claude", ended="2026-01-01T00:00:00Z"):
+        self.conn.execute(
+            "INSERT INTO sessions(id,tool,sid,path,project,cwd,started,ended,msg_count)"
+            " VALUES(?,?,?,?,?,?,?,?,1)",
+            (sid, tool, ssid, f"/sess/{ssid}", project, f"/cwd/{project}", ended, ended))
+
+    def _ev(self, session_id, name, path, ts):
+        self.conn.execute(
+            "INSERT INTO tool_events(session_id,idx,ts,kind,name,path) VALUES(?,?,?,?,?,?)",
+            (session_id, 0, ts, "file", name, path))
+
+    def files(self, **q):
+        return self.h.api_files(q)["files"]
+
+    # -- list branch --
+
+    def test_lists_only_written_files_not_reads(self):
+        # notes.txt was only Read -> excluded; the two written files remain.
+        self.assertEqual({f["path"] for f in self.files()},
+                         {"/repo-a/report.md", "/repo-b/page.html"})
+
+    def test_groups_by_path_with_counts(self):
+        rep = {f["path"]: f for f in self.files()}["/repo-a/report.md"]
+        self.assertEqual(rep["ops"], 3)            # Write + Edit + apply_patch
+        self.assertEqual(rep["session_count"], 2)  # s1 and s2 both touched it
+        self.assertEqual(rep["last_ts"], "2026-01-02T09:00:00Z")
+
+    def test_last_session_is_most_recent_toucher(self):
+        rep = next(f for f in self.files() if f["path"].endswith("report.md"))
+        self.assertEqual(rep["last_session_id"], 2)
+        self.assertEqual(rep["tool"], "codex")
+
+    def test_default_sort_is_recent(self):
+        # page.html (01-02 10:00) is newer than report.md's last touch (01-02 09:00).
+        self.assertEqual([f["path"] for f in self.files()],
+                         ["/repo-b/page.html", "/repo-a/report.md"])
+
+    def test_name_and_ext_derived(self):
+        by = {f["path"]: f for f in self.files()}
+        self.assertEqual(by["/repo-b/page.html"]["name"], "page.html")
+        self.assertEqual(by["/repo-b/page.html"]["ext"], "html")
+        self.assertEqual(by["/repo-a/report.md"]["ext"], "md")
+
+    def test_ext_filter(self):
+        self.assertEqual([f["path"] for f in self.files(ext=["html"])],
+                         ["/repo-b/page.html"])
+
+    def test_tool_filter_restricts_files_and_counts(self):
+        # Only claude (s1) events: report.md (Write+Edit). page.html is codex-only.
+        out = self.files(tool=["claude"])
+        self.assertEqual({f["path"] for f in out}, {"/repo-a/report.md"})
+        self.assertEqual(out[0]["ops"], 2)
+        self.assertEqual(out[0]["session_count"], 1)
+
+    def test_q_substring_filter_on_path(self):
+        self.assertEqual([f["path"] for f in self.files(q=["page"])],
+                         ["/repo-b/page.html"])
+
+    def test_types_facet_counts_distinct_files_per_ext(self):
+        types = {t["ext"]: t["n"] for t in self.h.api_files({})["types"]}
+        self.assertEqual(types, {"md": 1, "html": 1})
+
+    def test_types_facet_ignores_active_ext_filter(self):
+        # Filtering to html must not collapse the type list the UI needs.
+        types = {t["ext"]: t["n"] for t in self.h.api_files({"ext": ["html"]})["types"]}
+        self.assertEqual(types, {"md": 1, "html": 1})
+
+    def test_empty_db_returns_empty(self):
+        h = make_handler(fresh_conn())
+        self.assertEqual(h.api_files({}), {"files": [], "types": []})
+
+    # -- detail branch --
+
+    def test_file_detail_lists_all_sessions_recent_first(self):
+        res = self.h.api_files({"path": ["/repo-a/report.md"]})
+        self.assertEqual(res["path"], "/repo-a/report.md")
+        sess = res["sessions"]
+        self.assertEqual([s["session_id"] for s in sess], [2, 1])  # 01-02 then 01-01
+        self.assertEqual(sess[0]["ops"], 1)  # codex apply_patch
+        self.assertEqual(sess[1]["ops"], 2)  # claude Write + Edit
+
+    def test_file_detail_includes_resume_command(self):
+        sess = self.h.api_files({"path": ["/repo-a/report.md"]})["sessions"]
+        self.assertIn("codex resume s2", sess[0]["resume"])
+
+    def test_file_detail_excludes_read_only_sessions(self):
+        # notes.txt was only Read anywhere -> no generating sessions.
+        self.assertEqual(self.h.api_files({"path": ["/repo-a/notes.txt"]})["sessions"], [])
+
+
+class TestFilePayload(unittest.TestCase):
+    """/file — serve a generated artifact's content (server.Handler.file_payload).
+
+    Guarded: only files the index already knows about (a tool_events row) may be
+    served, so it is not an open local-file proxy. Returns (code, body, ctype):
+    bytes on success, an error dict on failure."""
+
+    def setUp(self):
+        self.conn = fresh_conn()
+        self.conn.execute(
+            "INSERT INTO sessions(id,tool,sid,path,project) VALUES(1,'claude','s1','/sess','proj')")
+        self.h = make_handler(self.conn)
+
+    def _index(self, file_path, name="Write"):
+        self.conn.execute(
+            "INSERT INTO tool_events(session_id,idx,ts,kind,name,path) VALUES(1,0,'t','file',?,?)",
+            (name, file_path))
+
+    def test_serves_indexed_html_as_text_html(self):
+        with tempfile.TemporaryDirectory() as d:
+            fp = Path(d) / "report.html"
+            fp.write_text("<h1>hi</h1>", encoding="utf-8")
+            self._index(str(fp))
+            code, body, ctype, headers = self.h.file_payload(str(fp))
+            self.assertEqual(code, 200)
+            self.assertEqual(body, b"<h1>hi</h1>")
+            self.assertTrue(ctype.startswith("text/html"))
+
+    def test_serves_markdown_inline_as_text_plain(self):
+        with tempfile.TemporaryDirectory() as d:
+            fp = Path(d) / "notes.md"
+            fp.write_text("# Title", encoding="utf-8")
+            self._index(str(fp))
+            code, body, ctype, headers = self.h.file_payload(str(fp))
+            self.assertEqual(code, 200)
+            self.assertEqual(body, b"# Title")
+            self.assertTrue(ctype.startswith("text/plain"))
+
+    def test_html_served_sandboxed_and_nosniff(self):
+        # A malicious artifact must not run on the dashboard origin: an opaque-origin
+        # sandbox (NO allow-same-origin) keeps its scripts from reaching /api/*.
+        with tempfile.TemporaryDirectory() as d:
+            fp = Path(d) / "evil.html"
+            fp.write_text("<script>fetch('/api/sessions')</script>", encoding="utf-8")
+            self._index(str(fp))
+            code, body, ctype, headers = self.h.file_payload(str(fp))
+            self.assertEqual(code, 200)
+            csp = headers.get("Content-Security-Policy", "")
+            self.assertIn("sandbox", csp)
+            self.assertNotIn("allow-same-origin", csp)
+            self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
+
+    def test_rejects_path_not_in_index(self):
+        with tempfile.TemporaryDirectory() as d:
+            fp = Path(d) / "secret.env"      # exists on disk but never indexed
+            fp.write_text("KEY=1", encoding="utf-8")
+            code, body, ctype, headers = self.h.file_payload(str(fp))
+            self.assertEqual(code, 404)
+            self.assertIn("error", body)
+
+    def test_indexed_but_missing_on_disk_is_404(self):
+        self._index("/repo/gone.html")       # indexed, but no such file
+        code, body, ctype, headers = self.h.file_payload("/repo/gone.html")
+        self.assertEqual(code, 404)
+        self.assertIn("error", body)
+
+    def test_empty_path_rejected(self):
+        code, body, ctype, headers = self.h.file_payload("")
+        self.assertEqual(code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

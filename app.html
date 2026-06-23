@@ -265,7 +265,20 @@
   .prov-row .sample{font-family:var(--mono);font-size:11.5px;color:var(--muted);white-space:pre-wrap;
     overflow-wrap:anywhere;margin-top:5px;border-left:2px solid var(--line);padding-left:8px;}
   .lnk{font-size:11px;padding:2px 8px;border:1px solid var(--line);border-radius:6px;color:var(--accent);text-decoration:none;background:var(--paper);}
+  .lnk.open{background:var(--accent);color:#fff;border-color:var(--accent);}
   .copy{font-family:var(--mono);font-size:11px;padding:2px 8px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--muted);}
+  /* Files view (reuses .prov / .prov-row) */
+  .fsort{padding:9px 12px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);outline:none;}
+  .ftypes{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;}
+  .ftypes .chip small{opacity:.6;font-family:var(--mono);}
+  .prov-row .ext{font-family:var(--mono);font-size:10.5px;font-weight:700;color:var(--accent);
+    background:var(--paper);border:1px solid var(--line);border-radius:5px;padding:1px 6px;}
+  .file-open{text-align:left;font-size:12px;padding:3px 9px;border:1px solid var(--line);border-radius:6px;
+    background:var(--paper);color:var(--ink);cursor:pointer;display:inline-flex;align-items:center;gap:6px;}
+  .file-open:hover{border-color:var(--accent);}
+  .file-expand{font-size:11px;padding:3px 9px;border:1px dashed var(--line);border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;}
+  .file-sessions{margin-top:8px;padding-left:10px;border-left:2px solid var(--line);display:flex;flex-direction:column;gap:6px;}
+  .fs-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 
   .gear{position:fixed;right:16px;bottom:16px;width:42px;height:42px;border-radius:50%;
     background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);font-size:18px;z-index:20;}
@@ -399,6 +412,7 @@
       <button data-view="browse" aria-pressed="true" title="Browse ( b )">Browse</button>
       <button data-view="analytics" title="Analytics ( a )">Analytics</button>
       <button data-view="provenance" title="Provenance ( p )">Provenance</button>
+      <button data-view="files" title="Generated files ( f )">Files</button>
     </div>
     <div class="stats" id="stats"></div>
     <button id="refreshbtn" class="refreshbtn" title="Re-index — pick up newly created sessions ( r )">&#8635; Refresh</button>
@@ -446,6 +460,7 @@
 
   <div class="view dash" id="view-analytics" style="display:none"></div>
   <div class="view prov" id="view-provenance" style="display:none"></div>
+  <div class="view prov" id="view-files" style="display:none"></div>
 </div>
 
 <button class="helpbtn" id="helpbtn" title="Keyboard shortcuts ( ? )">?</button>
@@ -492,6 +507,7 @@
       <div class="sc-row"><span class="lbl">Browse</span><kbd>b</kbd></div>
       <div class="sc-row"><span class="lbl">Analytics</span><kbd>a</kbd></div>
       <div class="sc-row"><span class="lbl">Provenance</span><kbd>p</kbd></div>
+      <div class="sc-row"><span class="lbl">Files</span><kbd>f</kbd></div>
       <div class="sc-row"><span class="lbl">Re-index / refresh</span><kbd>r</kbd></div>
       <div class="sc-sec">Panels</div>
       <div class="sc-row"><span class="lbl">Toggle projects</span><kbd>[</kbd></div>
@@ -510,6 +526,22 @@ const api = (p,q={}) => fetch(p + '?' + new URLSearchParams(q)).then(r=>r.json()
 const apiPost = (p,body) => fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},
   body:JSON.stringify(body||{})}).then(r=>r.json());
 const esc = s => (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const escAttr = s => esc(s).replace(/"/g,'&quot;');
+// Open/copy affordances for a file path. Cursor & VS Code have browser-launchable
+// file URL schemes; Zed has none yet (zed-industries/zed#8482) so we copy `zed
+// "<path>"`; cmux has no file-open scheme either, so "Copy path" covers any pane.
+function editorLinks(path){
+  if(!path) return '';
+  const u=encodeURI(path);
+  return '<a class="lnk open" href="/file?path='+encodeURIComponent(path)+'" target="_blank" rel="noopener" title="View the generated file">Open</a>'
+    +' <a class="lnk" href="cursor://file/'+u+'">Cursor</a>'
+    +' <a class="lnk" href="vscode://file/'+u+'">VS Code</a>'
+    +' <button class="copy" data-copy="'+escAttr('zed "'+path+'"')+'" title="Copy: zed &quot;'+escAttr(path)+'&quot;">Zed</button>'
+    +' <button class="copy" data-copy="'+escAttr(path)+'" title="Copy path (paste into cmux or any terminal)">Copy path</button>';
+}
+function bindCopy(box){ box.querySelectorAll('.copy').forEach(b=> b.onclick=()=>{
+  navigator.clipboard.writeText(b.dataset.copy);
+  const o=b.textContent; b.textContent='copied'; setTimeout(()=>b.textContent=o,1200); }); }
 const usd = n => (n>=1000 ? '$'+(n/1000).toFixed(1)+'k' : '$'+(+n||0).toFixed(2));
 const num = n => (+n||0).toLocaleString();
 const fmtDate = iso => { if(!iso) return '-'; const d=new Date(iso); if(isNaN(d)) return iso.slice(0,16).replace('T',' ');
@@ -686,11 +718,12 @@ $('#nav').querySelectorAll('button').forEach(b=> b.onclick=()=> switchView(b.dat
 function switchView(v){
   state.view=v;
   $('#nav').querySelectorAll('button').forEach(b=> b.setAttribute('aria-pressed', b.dataset.view===v));
-  ['browse','analytics','provenance'].forEach(x=> $('#view-'+x).style.display = x===v?'':'none');
+  ['browse','analytics','provenance','files'].forEach(x=> $('#view-'+x).style.display = x===v?'':'none');
   $('#searchwrap').style.display = v==='browse'?'':'none';
   if(v==='browse'){ setAtlasMapClass(); renderFilters(); reloadList(); }
   if(v==='analytics') loadAnalytics();
   if(v==='provenance') loadProvenance();
+  if(v==='files') loadFiles();
 }
 
 // ---- stats / filters / sidebar ----
@@ -1161,6 +1194,7 @@ function cmdkActions(q){
   add('Go to Browse','view',()=>switchView('browse'));
   add('Go to Analytics','view',()=>switchView('analytics'));
   add('Go to Provenance','view',()=>switchView('provenance'));
+  add('Go to Files','view',()=>switchView('files'));
   LAYOUTS.forEach(([v,l])=> add('Layout: '+l,'layout',()=>setLayout(v)));
   add('Re-index sessions','action',()=>{ const b=$('#refreshbtn'); if(b) b.click(); });
   (PROJECTS||[]).forEach(p=> add('Project: '+p.project,'project',()=>gotoProject(p.project)));
@@ -1232,6 +1266,7 @@ document.addEventListener('keydown', e=>{
   if(e.key==='b'){ e.preventDefault(); switchView('browse'); return; }
   if(e.key==='a'){ e.preventDefault(); switchView('analytics'); return; }
   if(e.key==='p'){ e.preventDefault(); switchView('provenance'); return; }
+  if(e.key==='f'){ e.preventDefault(); switchView('files'); return; }
   if(e.key==='r'){ e.preventDefault(); $('#refreshbtn').click(); return; }
   if(e.key==='['){ e.preventDefault(); toggleSidebar(); return; }
   if(e.key===']'){ e.preventDefault(); toggleList(); return; }
@@ -1319,8 +1354,7 @@ async function runProv(q){
   if(r.error){ box.innerHTML='<div class="loading">'+esc(r.error)+'</div>'; return; }
   box.innerHTML = '<div class="hint" style="margin-bottom:8px">'+r.results.length+' sessions</div>'
     + (r.results.map(s=>{
-    const editors = (provState.kind==='file' && s.sample) ?
-      '<a class="lnk" href="cursor://file/'+encodeURI(s.sample)+'">Cursor</a> <a class="lnk" href="vscode://file/'+encodeURI(s.sample)+'">VS Code</a>' : '';
+    const editors = (provState.kind==='file' && s.sample) ? editorLinks(s.sample) : '';
     const resume = s.resume ? '<button class="copy" data-copy="'+esc(s.resume)+'">'+esc(s.resume.split(' ')[0])+' resume</button>' : '';
     return '<div class="prov-row"><div class="ph"><span class="tag '+s.tool+'">'+s.tool+'</span>'
       +'<b>'+esc(s.project||'-')+'</b><span class="hint">'+esc(s.title||'')+'</span><span class="cost">'+s.count+'x</span></div>'
@@ -1329,6 +1363,76 @@ async function runProv(q){
   }).join('') || '<div class="loading">No matches.</div>');
   box.querySelectorAll('.copy').forEach(b=> b.onclick=()=>{ navigator.clipboard.writeText(b.dataset.copy);
     const o=b.textContent; b.textContent='copied'; setTimeout(()=>b.textContent=o,1200); });
+}
+
+// ---- files (generated artifacts) ----
+let filesState={ext:'', sort:'recent', q:''};
+function loadFiles(){
+  $('#view-files').innerHTML =
+    '<div class="ctrls">'
+    +'<input type="search" id="fq" placeholder="Filter by file name or path…" autocomplete="off" value="'+esc(filesState.q)+'">'
+    +'<select id="fsort" class="fsort">'
+    + [['recent','Recently generated'],['name','Name'],['sessions','Most sessions'],['ops','Most edits']]
+        .map(o=>'<option value="'+o[0]+'"'+(filesState.sort===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')
+    +'</select></div>'
+    +'<div id="ftypes" class="ftypes"></div>'
+    +'<div id="fresults"><div class="loading">Loading generated files…</div></div>';
+  let timer=null;
+  $('#fq').addEventListener('input', e=>{ clearTimeout(timer); filesState.q=e.target.value.trim(); timer=setTimeout(runFiles,220); });
+  $('#fsort').onchange=e=>{ filesState.sort=e.target.value; runFiles(); };
+  runFiles();
+  $('#fq').focus();
+}
+function openFromFiles(id){ if(state.view!=='browse') switchView('browse'); openSession(id); }
+function fileSessionBtn(s){
+  return '<button class="file-open" data-id="'+s.session_id+'"><span class="tag '+s.tool+'">'+esc(s.tool)+'</span> '
+    +esc(s.project||'-')+' &mdash; '+esc(s.title||'(untitled)')+'</button>';
+}
+function fileRowHTML(f){
+  const editors=editorLinks(f.path);
+  return '<div class="prov-row" data-path="'+esc(f.path)+'">'
+    +'<div class="ph">'+(f.ext?'<span class="ext">.'+esc(f.ext)+'</span>':'')
+      +'<b>'+esc(f.name||f.path)+'</b>'
+      +'<span class="cost">'+f.ops+' edit'+(f.ops!==1?'s':'')+'</span>'
+      +'<span class="hint">'+f.session_count+' session'+(f.session_count!==1?'s':'')+'</span>'
+      +'<span class="hint">'+(ago(f.last_ts)||fmtDate(f.last_ts))+'</span></div>'
+    +'<div class="sample">'+esc(f.path)+'</div>'
+    +'<div class="ph" style="margin-top:6px">'
+      + fileSessionBtn({session_id:f.last_session_id, tool:f.tool, project:f.project, title:f.title})
+      + (f.session_count>1?'<button class="file-expand" data-path="'+esc(f.path)+'" data-n="'+f.session_count+'">all '+f.session_count+' sessions</button>':'')
+      + editors+'</div>'
+    +'<div class="file-sessions" hidden></div></div>';
+}
+async function runFiles(){
+  const box=$('#fresults');
+  const q={sort:filesState.sort};
+  if(filesState.q) q.q=filesState.q;
+  if(filesState.ext) q.ext=filesState.ext;
+  const r=await api('/api/files',q);
+  if(r.error){ box.innerHTML='<div class="loading">'+esc(r.error)+'</div>'; return; }
+  const tdiv=$('#ftypes');
+  const chip=(ext,label,n)=>'<button class="chip" data-ext="'+esc(ext)+'" aria-pressed="'+(filesState.ext===ext)+'">'
+    +esc(label)+(n!=null?' <small>'+n+'</small>':'')+'</button>';
+  tdiv.innerHTML = chip('','All') + (r.types||[]).map(t=>chip(t.ext, t.ext?('.'+t.ext):'(no ext)', t.n)).join('');
+  tdiv.querySelectorAll('[data-ext]').forEach(b=> b.onclick=()=>{ filesState.ext=b.dataset.ext; runFiles(); });
+  const files=r.files||[];
+  box.innerHTML = '<div class="hint" style="margin-bottom:8px">'+files.length+' file'+(files.length!==1?'s':'')+'</div>'
+    + (files.map(fileRowHTML).join('')
+       || '<div class="loading">No generated files'+(filesState.q||filesState.ext?' match this filter':' indexed yet')+'.</div>');
+  box.querySelectorAll('.file-open').forEach(b=> b.onclick=()=> openFromFiles(+b.dataset.id));
+  box.querySelectorAll('.file-expand').forEach(b=> b.onclick=()=> toggleFileSessions(b));
+  bindCopy(box);
+}
+async function toggleFileSessions(btn){
+  const row=btn.closest('.prov-row'), box=row.querySelector('.file-sessions'), n=btn.dataset.n;
+  if(!box.hidden){ box.hidden=true; btn.textContent='all '+n+' sessions'; return; }
+  box.hidden=false; btn.textContent='hide sessions'; box.innerHTML='<div class="loading">Loading…</div>';
+  const r=await api('/api/files',{path:btn.dataset.path});
+  box.innerHTML=(r.sessions||[]).map(s=>
+    '<div class="fs-row">'+fileSessionBtn(s)
+    +'<span class="hint">'+s.ops+'x &middot; '+(ago(s.last_ts)||fmtDate(s.last_ts))+'</span></div>').join('')
+    || '<div class="loading">none</div>';
+  box.querySelectorAll('.file-open').forEach(b=> b.onclick=()=> openFromFiles(+b.dataset.id));
 }
 
 // refresh: re-index on the server, then reload the current view
@@ -1340,6 +1444,7 @@ $('#refreshbtn').onclick = async () => {
     await loadStats();
     if (state.view === 'analytics') loadAnalytics();
     else if (state.view === 'provenance') loadProvenance();
+    else if (state.view === 'files') loadFiles();
     else { loadSidebar(); loadCollections(); await loadBookmarked(); reloadList(); }
   } finally { b.disabled = false; b.innerHTML = o; }
 };
