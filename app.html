@@ -295,7 +295,7 @@
   .tbtn{padding:5px 10px;border-radius:8px;border:1px solid var(--line);background:var(--paper);color:var(--ink);font-size:12px;}
   .tbtn[aria-pressed="true"]{background:var(--accent);color:#fff;border-color:var(--accent);}
 
-  /* ===== command palette (Cmd+K / "/") ===== */
+  /* ===== command palette ("/") ===== */
   .cmdk{position:fixed;inset:0;z-index:40;display:none;justify-content:center;align-items:flex-start;
     padding-top:12vh;background:rgba(0,0,0,.34);}
   .cmdk.open{display:flex;}
@@ -502,7 +502,7 @@
     <div class="sc-title">Keyboard shortcuts</div>
     <div class="sc-grid">
       <div class="sc-sec">Navigate</div>
-      <div class="sc-row"><span class="lbl">Command palette</span><span><kbd>&#8984; K</kbd> &nbsp;<kbd>/</kbd></span></div>
+      <div class="sc-row"><span class="lbl">Command palette</span><kbd>/</kbd></div>
       <div class="sc-row"><span class="lbl">Prev / next session</span><span><kbd>k</kbd> <kbd>j</kbd></span></div>
       <div class="sc-row"><span class="lbl">Browse</span><kbd>b</kbd></div>
       <div class="sc-row"><span class="lbl">Analytics</span><kbd>a</kbd></div>
@@ -1169,7 +1169,7 @@ async function runSearch(){
 // start hint cycle on page load
 _startHintCycle();
 
-// ---- command palette (Cmd+K / "/") ----
+// ---- command palette ("/") ----
 const cmdk = {open:false, sel:0, items:[], timer:null};
 let SESSION_INDEX = null;   // lazy cache of all sessions for client-side title/project matching
 async function ensureSessionIndex(){
@@ -1184,7 +1184,6 @@ function openCmdk(){
   inp.focus(); ensureSessionIndex();
 }
 function closeCmdk(){ cmdk.open=false; $('#cmdk').classList.remove('open'); }
-function toggleCmdk(){ cmdk.open ? closeCmdk() : openCmdk(); }
 function cmdkMove(d){ if(!cmdk.items.length) return;
   cmdk.sel=(cmdk.sel+d+cmdk.items.length)%cmdk.items.length; renderCmdk(); }
 function gotoProject(name){
@@ -1253,7 +1252,6 @@ $('#cmdk').addEventListener('mousedown', e=>{ if(e.target.id==='cmdk') closeCmdk
 
 // ---- keyboard nav ----
 document.addEventListener('keydown', e=>{
-  if((e.metaKey||e.ctrlKey) && (e.key==='k' || e.key==='K')){ e.preventDefault(); toggleCmdk(); return; }
   if(cmdk.open){
     if(e.key==='Escape'){ e.preventDefault(); closeCmdk(); }
     else if(e.key==='ArrowDown'){ e.preventDefault(); cmdkMove(1); }
