@@ -412,7 +412,7 @@
       <button data-view="browse" aria-pressed="true" title="Browse ( b )">Browse</button>
       <button data-view="analytics" title="Analytics ( a )">Analytics</button>
       <button data-view="provenance" title="Provenance ( p )">Provenance</button>
-      <button data-view="files" title="Generated files ( f )">Files</button>
+      <button data-view="files" title="Generated files">Files</button>
     </div>
     <div class="stats" id="stats"></div>
     <button id="refreshbtn" class="refreshbtn" title="Re-index — pick up newly created sessions ( r )">&#8635; Refresh</button>
@@ -507,7 +507,6 @@
       <div class="sc-row"><span class="lbl">Browse</span><kbd>b</kbd></div>
       <div class="sc-row"><span class="lbl">Analytics</span><kbd>a</kbd></div>
       <div class="sc-row"><span class="lbl">Provenance</span><kbd>p</kbd></div>
-      <div class="sc-row"><span class="lbl">Files</span><kbd>f</kbd></div>
       <div class="sc-row"><span class="lbl">Re-index / refresh</span><kbd>r</kbd></div>
       <div class="sc-sec">Panels</div>
       <div class="sc-row"><span class="lbl">Toggle projects</span><kbd>[</kbd></div>
@@ -1269,7 +1268,6 @@ document.addEventListener('keydown', e=>{
   if(e.key==='b'){ e.preventDefault(); switchView('browse'); return; }
   if(e.key==='a'){ e.preventDefault(); switchView('analytics'); return; }
   if(e.key==='p'){ e.preventDefault(); switchView('provenance'); return; }
-  if(e.key==='f'){ e.preventDefault(); switchView('files'); return; }
   if(e.key==='r'){ e.preventDefault(); $('#refreshbtn').click(); return; }
   if(e.key==='['){ e.preventDefault(); toggleSidebar(); return; }
   if(e.key===']'){ e.preventDefault(); toggleList(); return; }
