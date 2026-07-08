@@ -459,6 +459,26 @@ class TestApiSessionsSort(unittest.TestCase):
         out = self.h.api_sessions({"project": ["alpha"], "sort": ["cost"]})["sessions"]
         self.assertEqual([s["id"] for s in out], [2])
 
+    def test_limit_caps_returned_rows(self):
+        self.assertEqual(self.ids_p({"limit": ["2"]}), [1, 3])
+
+    def test_offset_pages_without_overlap(self):
+        # recent order is [1, 3, 2]; paging limit=2 must yield disjoint pages.
+        p0 = self.ids_p({"limit": ["2"], "offset": ["0"]})
+        p1 = self.ids_p({"limit": ["2"], "offset": ["2"]})
+        self.assertEqual(p0, [1, 3])
+        self.assertEqual(p1, [2])
+        self.assertEqual(set(p0) & set(p1), set())
+
+    def test_offset_beyond_end_is_empty(self):
+        self.assertEqual(self.ids_p({"offset": ["99"]}), [])
+
+    def test_negative_offset_clamped_to_zero(self):
+        self.assertEqual(self.ids_p({"offset": ["-5"]}), self.ids("recent"))
+
+    def ids_p(self, params):
+        return [s["id"] for s in self.h.api_sessions(params)["sessions"]]
+
 
 class TestApiSearchRole(unittest.TestCase):
     """The `role` filter on /api/search (server.api_search)."""
