@@ -1420,6 +1420,7 @@ class Handler(BaseHTTPRequestHandler):
         collection = (q.get("collection", [""])[0] or "").strip()
         sort = (q.get("sort", ["recent"])[0] or "recent").strip()
         limit = min(int(q.get("limit", ["300"])[0]), 2000)
+        offset = max(int(q.get("offset", ["0"])[0]), 0)
         where, args = [], []
         if tool:
             where.append("tool=?"); args.append(tool)
@@ -1446,8 +1447,9 @@ class Handler(BaseHTTPRequestHandler):
             "cost":     "cost_usd DESC, ended DESC",
             "messages": "msg_count DESC, ended DESC",
         }
-        sql += " ORDER BY " + order_by.get(sort, order_by["recent"]) + " LIMIT ?"
+        sql += " ORDER BY " + order_by.get(sort, order_by["recent"]) + " LIMIT ? OFFSET ?"
         args.append(limit)
+        args.append(offset)
         with self.lock:
             rows = self.conn.execute(sql, args).fetchall()
         return {"sessions": [dict(r) for r in rows]}

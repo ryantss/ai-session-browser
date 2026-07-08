@@ -453,6 +453,7 @@
     <div class="list">
       <div class="filters" id="filters"></div>
       <div id="rows"></div>
+      <div id="list-sentinel" aria-hidden="true"></div>
     </div>
     <div class="detail" id="detail">
       <div class="empty">
@@ -561,7 +562,9 @@ let state = {view:'browse', tool:'', project:'', collection:'', collectionName:'
   density:(localStorage.getItem('sb_density')||'all'),
   sidebarHidden:(localStorage.getItem('sb_sidebar_hidden')==='1'),
   outlineHidden:(localStorage.getItem('sb_outline_hidden')==='1'),
-  listHidden:(localStorage.getItem('sb_list_hidden')==='1')};
+  listHidden:(localStorage.getItem('sb_list_hidden')==='1'),
+  listItems:[], listOffset:0, listDone:false, listLoading:false, listGen:0};
+const LIST_PAGE = 100;   // sessions fetched per infinite-scroll page
 
 ['theme','accent','font'].forEach(k=>{ const v=localStorage.getItem('sb_'+k); if(v) document.documentElement.dataset[k]=v; });
 function syncTweaks(){ document.querySelectorAll('[data-set]').forEach(b=>
@@ -1012,9 +1015,72 @@ async function loadSessions(){
   // Leaving search: relevance has no meaning in the plain list, fall back to recent.
   if(state.mode==='search' && state.sort==='relevance') state.sort='recent';
   state.mode='list'; refreshSortSelect();
+  // reset infinite-scroll paging for the fresh filter set; bump the generation
+  // token so any in-flight loadMore from the previous filter is discarded.
+  const gen = ++state.listGen;
+  state.listItems=[]; state.listOffset=0; state.listDone=false;
+  state.listLoading=true;   // lock: block observer-triggered loadMore during the initial fetch
+  setSentinel('');
   $('#rows').innerHTML='<div class="loading">Loading...</div>';
-  const r = await api('/api/sessions', listParams());
-  renderRows(r.sessions, false);
+  try{
+    const r = await api('/api/sessions', listParams({limit:LIST_PAGE, offset:0}));
+    if(gen!==state.listGen) return;   // a newer load superseded this one
+    const items = r.sessions || [];
+    state.listItems = items;
+    state.listOffset = items.length;
+    state.listDone = items.length < LIST_PAGE;
+    renderRows(state.listItems, false);
+  }catch(e){
+    if(gen!==state.listGen) return;
+    $('#rows').innerHTML='<div class="loading">Failed to load sessions.</div>';
+    state.listDone = true;   // stop auto-retries; a filter change re-triggers a fresh load
+  }finally{
+    if(gen===state.listGen) state.listLoading=false;
+  }
+  setSentinel(state.listDone ? '' : 'loading');
+  // A short first page may not fill the viewport; pull the next page eagerly.
+  requestAnimationFrame(maybeLoadMore);
+}
+async function loadMore(){
+  if(state.mode!=='list' || state.atlasMap || state.listLoading || state.listDone) return;
+  const gen = state.listGen;
+  state.listLoading=true; setSentinel('loading');
+  try{
+    const r = await api('/api/sessions', listParams({limit:LIST_PAGE, offset:state.listOffset}));
+    if(gen!==state.listGen) return;   // filter changed mid-flight; drop this page
+    const items = r.sessions || [];
+    if(items.length){
+      state.listItems = state.listItems.concat(items);
+      state.listOffset += items.length;
+      renderRows(state.listItems, false);
+    }
+    if(items.length < LIST_PAGE) state.listDone=true;
+  }catch(e){
+    if(gen!==state.listGen) return;
+    state.listDone = true;   // stop auto-retries after a failed page fetch
+  }finally{
+    if(gen===state.listGen) state.listLoading=false;
+  }
+  setSentinel(state.listDone ? '' : 'loading');
+  requestAnimationFrame(maybeLoadMore);
+}
+// Fire another page if the sentinel is already on-screen (viewport not yet filled).
+function maybeLoadMore(){
+  if(state.mode!=='list' || state.atlasMap || state.listLoading || state.listDone) return;
+  const listEl=document.querySelector('#view-browse .list'), sent=$('#list-sentinel');
+  if(!listEl||!sent) return;
+  const lr=listEl.getBoundingClientRect(), sr=sent.getBoundingClientRect();
+  if(sr.top <= lr.bottom + 400) loadMore();
+}
+function setSentinel(mode){
+  const el=$('#list-sentinel'); if(!el) return;
+  el.innerHTML = mode==='loading' ? '<div class="loading" style="padding:14px">Loading more...</div>' : '';
+}
+function initListScroll(){
+  const listEl=document.querySelector('#view-browse .list'), sent=$('#list-sentinel');
+  if(!listEl||!sent||listEl._io) return;
+  const io=new IntersectionObserver(es=>{ if(es.some(e=>e.isIntersecting)) loadMore(); }, {root:listEl, rootMargin:'400px 0px'});
+  io.observe(sent); listEl._io=io;
 }
 function renderRows(items, isSearch){
   const el=$('#rows'); const L=state.layout;
@@ -1485,7 +1551,7 @@ $('#refreshbtn').onclick = async () => {
 
 // init
 loadStats().then(async ()=>{ loadSidebar(); loadCollections(); await loadBookmarked();
-  initLayoutControls(); renderFilters(); reloadList();
+  initLayoutControls(); initListScroll(); renderFilters(); reloadList();
 });
 </script>
 </body>
