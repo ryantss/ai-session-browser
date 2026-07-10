@@ -1,0 +1,23 @@
+[tools]
+python = "3.12"           # requires-python >=3.9
+uv = "latest"
+
+[env]
+# auto-create + activate .venv on cd — no manual `source .venv/bin/activate`
+_.python.venv = { path = ".venv", create = true }
+
+[tasks.up]
+description = "Install (editable) + run server (one-shot)"
+run = [
+  "uv pip install -e .",   # stdlib-only; also registers the ai-session-browser CLI
+  "python3 server.py",     # serve on http://localhost:8765
+]
+[tasks.dev]
+description = "Run server only"
+run = "python3 server.py"
+[tasks.test]
+description = "Run tests (stdlib unittest)"
+run = "python3 -m unittest discover -s tests"
+[tasks.down]
+description = "Stop dev server on its port"
+run = "lsof -ti :8765 | xargs kill 2>/dev/null && echo 'stopped :8765' || echo 'nothing on :8765'"
