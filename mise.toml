@@ -20,4 +20,4 @@ description = "Run tests (stdlib unittest)"
 run = "python3 -m unittest discover -s tests"
 [tasks.down]
 description = "Stop dev server on its port"
-run = "lsof -ti :8765 | xargs kill 2>/dev/null && echo 'stopped :8765' || echo 'nothing on :8765'"
+run = "pids=$(lsof -t -nP -iTCP:8765 -sTCP:LISTEN); if [ -n \"$pids\" ]; then kill $pids && echo 'stopped :8765'; else echo 'nothing on :8765'; fi"
