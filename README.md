@@ -31,6 +31,47 @@ This adds a `/browse-sessions` command to Claude Code.
 pipx install .        # then run:  ai-session-browser
 ```
 
+### Local setup with mise (optional)
+
+Nothing is required beyond Python 3.9+ — but if you use [mise](https://mise.jdx.dev), the checked-in `mise.toml` pins the toolchain (Python 3.12 + uv), auto-manages the `.venv` on `cd` (no manual `source .venv/bin/activate`), and exposes a small task vocabulary.
+
+```bash
+brew install mise
+echo 'eval "$(mise activate zsh)"' >> ~/.zshrc && exec zsh   # one time
+
+cd ai-session-browser
+mise trust            # trust this mise.toml (mise refuses untrusted config)
+mise install          # fetch Python 3.12 + uv
+mise run up           # editable install + start server on http://localhost:8765
+```
+
+| Task | Runs |
+|---|---|
+| `mise run up` | `uv pip install -e .` then `python3 server.py` (one-shot) |
+| `mise run dev` | `python3 server.py` only |
+| `mise run down` | stop whatever listens on `:8765` |
+| `mise run test` | `python3 -m unittest discover -s tests` |
+
+The server runs in the foreground (`Ctrl-C` to stop); `mise run down` is for when it's backgrounded or orphaned on the port. Override the port with `--port N` / `SESSION_BROWSER_PORT` (then `down` targets a different port — adjust the task).
+
+### Shorter commands (optional)
+
+Prefer `dev up` to `mise run up`? Drop this wrapper into your `~/.zshrc` (below `eval "$(mise activate zsh)"`):
+
+```zsh
+dev() {
+  case "$1" in
+    ""|run)  mise run dev ;;                 # dev     -> start app
+    up)      mise install && mise run up ;;  # dev up  -> runtimes + deps + server
+    down)    mise run down 2>/dev/null || echo "no down task in this repo" ;;
+    status)  mise ls --current && echo "--- tasks ---" && mise tasks ;;
+    *)        mise run "$@" ;;               # dev test | dev lint | dev typecheck ...
+  esac
+}
+```
+
+Then `dev up`, `dev`, `dev down`, `dev status`, and `dev test` work in any repo that has a `mise.toml`.
+
 ---
 
 ## Three views
