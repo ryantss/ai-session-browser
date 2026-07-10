@@ -54,6 +54,24 @@ mise run up           # editable install + start server on http://localhost:8765
 
 The server runs in the foreground (`Ctrl-C` to stop); `mise run down` is for when it's backgrounded or orphaned on the port. Override the port with `--port N` / `SESSION_BROWSER_PORT` (then `down` targets a different port — adjust the task).
 
+### Shorter commands (optional)
+
+Prefer `dev up` to `mise run up`? Drop this wrapper into your `~/.zshrc` (below `eval "$(mise activate zsh)"`):
+
+```zsh
+dev() {
+  case "$1" in
+    ""|run)  mise run dev ;;                 # dev     -> start app
+    up)      mise install && mise run up ;;  # dev up  -> runtimes + deps + server
+    down)    mise run down 2>/dev/null || echo "no down task in this repo" ;;
+    status)  mise ls --current && echo "--- tasks ---" && mise tasks ;;
+    *)        mise run "$@" ;;               # dev test | dev lint | dev typecheck ...
+  esac
+}
+```
+
+Then `dev up`, `dev`, `dev down`, `dev status`, and `dev test` work in any repo that has a `mise.toml`.
+
 ---
 
 ## Three views
